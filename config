@@ -1,25 +1,6 @@
-  
-ngx_feature="libubus"
-ngx_feature_name=
-ngx_feature_run=no
-ngx_feature_incs="#include <libubus.h>"
-ngx_feature_libs=-lubus
-. auto/feature
-
-if [ $ngx_found = yes ]; then
-
-    ngx_addon_name=ngx_http_ubus_module
-    ngx_module_type=HTTP
-    ngx_module_name=ngx_http_ubus_module
-    ngx_module_libs="-lubus -lubox -lblobmsg_json -ljson-c"
-    ngx_module_srcs="$ngx_addon_dir/ngx_http_ubus_module.c"
-    . auto/module
-
-    CORE_LIBS="$CORE_LIBS -lubus -lubox -lblobmsg_json -ljson-c"
-
-else
-    cat << END
-$0: error: the ubus addon requires the libubus library.
-END
-    exit 1
-fi
+ngx_addon_name=ngx_http_ubus_module
+ngx_module_type=HTTP
+ngx_module_name=ngx_http_ubus_module
+ngx_module_libs="-lubus -lubox -lblobmsg_json -ljson-c"
+ngx_module_srcs="$ngx_addon_dir/ngx_http_ubus_module.c"
+. auto/module
