@@ -14,7 +14,6 @@
 #define UBUS_MAX_POST_SIZE	65536
 #define UBUS_DEFAULT_SID	"00000000000000000000000000000000"
 
-static struct ubus_context *ctx;
 static struct blob_buf buf;
 
 struct dispatch_ubus {
@@ -48,6 +47,7 @@ typedef struct {
 		ngx_uint_t res_len;
 		ngx_chain_t* out_chain;
 		ngx_chain_t* out_chain_start;
+		struct ubus_context *ctx;
 		struct dispatch_ubus ubus;
 } ngx_http_ubus_loc_conf_t;
 
@@ -275,14 +275,14 @@ static bool ubus_allowed(ngx_http_ubus_loc_conf_t  *cglcf, const char *sid, cons
 	bool allow = false;
 	static struct blob_buf req;
 
-	if (ubus_lookup_id(ctx, "session", &id))
+	if (ubus_lookup_id(cglcf->ctx, "session", &id))
 		return false;
 
 	blob_buf_init(&req, 0);
 	blobmsg_add_string(&req, "ubus_rpc_session", sid);
 	blobmsg_add_string(&req, "object", obj);
 	blobmsg_add_string(&req, "function", fun);
-	ubus_invoke(ctx, id, "access", req.head, ubus_allowed_cb, &allow, cglcf->script_timeout * 500);
+	ubus_invoke(cglcf->ctx, id, "access", req.head, ubus_allowed_cb, &allow, cglcf->script_timeout * 500);
 
 	return allow;
 }
@@ -378,7 +378,7 @@ static ngx_int_t ubus_send_request(ngx_http_request_t *r, json_object *obj, cons
 	blob_buf_init(&du->buf, 0);
 	memset(&du->req, 0, sizeof(du->req));
 
-	ubus_invoke(ctx, du->obj, du->func, req.head, ubus_request_cb, du, cglcf->script_timeout * 1000);
+	ubus_invoke(cglcf->ctx, du->obj, du->func, req.head, ubus_request_cb, du, cglcf->script_timeout * 1000);
 
 	str = blobmsg_format_json(buf.head, true);
 	append_to_output_chain(r,cglcf,str);
@@ -456,7 +456,7 @@ static ngx_int_t ubus_send_list(ngx_http_request_t *request, json_object *obj, s
 
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
 		r = blobmsg_open_array(data.buf, "result");
-		ubus_lookup(ctx, NULL, ubus_list_cb, &data);
+		ubus_lookup(cglcf->ctx, NULL, ubus_list_cb, &data);
 		blobmsg_close_array(data.buf, r);
 	}
 	else {
@@ -467,7 +467,7 @@ static ngx_int_t ubus_send_list(ngx_http_request_t *request, json_object *obj, s
 			rem = blobmsg_data_len(dup);
 			data.verbose = true;
 			__blob_for_each_attr(cur, blobmsg_data(dup), rem)
-				ubus_lookup(ctx, blobmsg_data(cur), ubus_list_cb, &data);
+				ubus_lookup(cglcf->ctx, blobmsg_data(cur), ubus_list_cb, &data);
 			free(dup);
 		}
 		blobmsg_close_table(data.buf, r);
@@ -507,7 +507,7 @@ static ngx_int_t ubus_handle_request_object(ngx_http_request_t *r, struct json_o
 			goto error;
 
 		du->func = data.function;
-		if (ubus_lookup_id(ctx, data.object, &du->obj)) {
+		if (ubus_lookup_id(cglcf->ctx, data.object, &du->obj)) {
 			err = ERROR_OBJECT;
 			goto error;
 		}
@@ -785,13 +785,6 @@ ngx_http_ubus_handler(ngx_http_request_t *r)
 
 	cglcf->out_chain = NULL;
 	cglcf->res_len = 0;
-
-	ctx = ubus_connect(cglcf->socket_path.data);
-
-	if (!ctx) {
-		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Unable to connect to ubus socket: %s", cglcf->socket_path.data);
-		return NGX_HTTP_INTERNAL_SERVER_ERROR;
-	}
 	
 	switch (r->method)
 	{
@@ -849,10 +842,10 @@ static ngx_int_t
 ngx_http_ubus_init(ngx_http_ubus_loc_conf_t *conf)
 {
 
-		conf->ubus.jsobj = NULL;
-		conf->ubus.jstok = json_tokener_new();
+	conf->ubus.jsobj = NULL;
+	conf->ubus.jstok = json_tokener_new();
 
-		return NGX_OK;
+	return NGX_OK;
 }
 
 static void *
@@ -896,8 +889,15 @@ ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 				return NGX_CONF_ERROR;
 		}
 
+		conf->ctx = ubus_connect(conf->socket_path.data);
+
+		if (!conf->ctx) {
+			ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "Unable to connect to ubus socket: %s", conf->socket_path.data);
+			return NGX_CONF_ERROR;
+		}
+
 		if (conf->enable)
-				ngx_http_ubus_init(conf);
+			ngx_http_ubus_init(conf);
 
 		return NGX_CONF_OK;
 }
