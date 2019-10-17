@@ -160,6 +160,12 @@ struct rpc_data {
 	struct blob_attr *params;
 };
 
+struct cors_data {
+	char* ORIGIN;
+	char* ACCESS_CONTROL_REQUEST_METHOD;
+	char* ACCESS_CONTROL_REQUEST_HEADERS;
+};
+
 struct list_data {
 	bool verbose;
 	struct blob_buf *buf;
@@ -194,7 +200,7 @@ static const struct {
 };
 
 static void ubus_single_error(ngx_http_request_t *r, enum rpc_error type);
-static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_int_t status, ngx_int_t post_len);
+static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len);
 
 static bool parse_json_rpc(struct rpc_data *d, struct blob_attr *data)
 {
@@ -377,8 +383,6 @@ static ngx_int_t ubus_send_request(ngx_http_request_t *r, json_object *obj, cons
 	str = blobmsg_format_json(buf.head, true);
 	append_to_output_chain(r,cglcf,str);
 
-	cglcf->res_len = strlen(str);
-
 	return NGX_OK;
 }
 
@@ -473,8 +477,6 @@ static ngx_int_t ubus_send_list(ngx_http_request_t *request, json_object *obj, s
 
 	str = blobmsg_format_json(buf.head, true);
 	append_to_output_chain(request,cglcf,str);
-
-	cglcf->res_len = strlen(str);
 
 	return NGX_OK;
 }
@@ -597,7 +599,8 @@ static void ngx_http_ubus_read_req(ngx_http_request_t *r)
 	
 	if (du->jsobj || !du->jstok) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Error ubus struct not ok");
-		ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+		ubus_single_error(r, ERROR_PARSE);
+		ngx_http_finalize_request(r, NGX_HTTP_OK);
 		return;
 	}
 
@@ -609,8 +612,9 @@ static void ngx_http_ubus_read_req(ngx_http_request_t *r)
 
 		if (pos > UBUS_MAX_POST_SIZE) {
 			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Error max post size for ubus socket");
+			ubus_single_error(r, ERROR_PARSE);
 			ngx_pfree(r->pool,buffer);
-			ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+			ngx_http_finalize_request(r, NGX_HTTP_OK);
 			return;
 		}
 	}
@@ -620,12 +624,120 @@ static void ngx_http_ubus_read_req(ngx_http_request_t *r)
 	du->post_len = pos;
 }
 
-static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_int_t status, ngx_int_t post_len)
+static ngx_int_t set_custom_headers_out(ngx_http_request_t *r, const char *key_str, const char *value_str) {
+    ngx_table_elt_t   *h;
+	ngx_str_t key;
+	ngx_str_t value;
+
+	char * tmp;
+	int len;
+
+	len = strlen(key_str);
+	tmp = ngx_palloc(r->pool,len + 1);
+	ngx_memcpy(tmp,key_str,len);
+
+	key.data = tmp;
+	key.len = len;
+
+	len = strlen(value_str);
+	tmp = ngx_palloc(r->pool,len + 1);
+	ngx_memcpy(tmp,value_str,len);
+
+	value.data = tmp;
+	value.len = len;
+
+    h = ngx_list_push(&r->headers_out.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    h->key = key;
+    h->value = value;
+    h->hash = 1;
+
+    return NGX_OK;
+}
+
+static void parse_cors_from_header(ngx_http_request_t *r, struct cors_data *cors) {
+    ngx_list_part_t            *part;
+    ngx_table_elt_t            *h;
+    ngx_uint_t                  i;
+
+	ngx_uint_t found_count = 0;
+
+    part = &r->headers_in.headers.part;
+    h = part->elts;
+
+    for (i = 0; /* void */ ; i++) {
+		if ( found_count == 3 )
+			break;
+
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+
+            part = part->next;
+            h = part->elts;
+            i = 0;
+        }
+
+        if (ngx_strcmp("origin", h[i].key.data)) {
+            cors->ORIGIN = h[i].key.data;
+			found_count++;
+        }
+		else if (ngx_strcmp("access-control-request-method", h[i].key.data)) {
+            cors->ACCESS_CONTROL_REQUEST_METHOD = h[i].key.data;
+			found_count++;
+        }
+		else if (ngx_strcmp("access-control-request-headers", h[i].key.data)) {
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "ok3");
+            cors->ACCESS_CONTROL_REQUEST_HEADERS = h[i].key.data;
+			found_count++;
+        }
+
+    }
+}
+
+static void ubus_add_cors_headers(ngx_http_request_t *r)
+{
+	struct cors_data *cors;
+
+	cors = ngx_pcalloc(r->pool,sizeof(struct cors_data));
+	parse_cors_from_header(r,cors);
+
+	char* req;
+
+	if (!cors->ORIGIN)
+		return;
+
+	if (cors->ACCESS_CONTROL_REQUEST_METHOD)
+	{
+		char *req = cors->ACCESS_CONTROL_REQUEST_METHOD;
+		if (strcmp(req, "POST") && strcmp(req, "OPTIONS"))
+			return;
+	}
+
+	set_custom_headers_out(r,"Access-Control-Allow-Origin",cors->ORIGIN);
+
+	if (cors->ACCESS_CONTROL_REQUEST_HEADERS)
+		set_custom_headers_out(r,"Access-Control-Allow-Headers",cors->ACCESS_CONTROL_REQUEST_HEADERS);
+
+	set_custom_headers_out(r,"Access-Control-Allow-Methods","POST, OPTIONS");
+	set_custom_headers_out(r,"Access-Control-Allow-Credentials","true");
+
+	ngx_pfree(r->pool,cors);
+}
+
+static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len)
 {
 	r->headers_out.status = status;
 	r->headers_out.content_type.len = sizeof("application/json") - 1;
 	r->headers_out.content_type.data = (u_char *) "application/json";
 	r->headers_out.content_length_n = post_len;
+
+	if (cglcf->cors)
+		ubus_add_cors_headers(r);
 
 	return ngx_http_send_header(r);
 	
@@ -659,7 +771,7 @@ static void ubus_single_error(ngx_http_request_t *r, enum rpc_error type)
 	str = blobmsg_format_json(buf.head, true);
 	append_to_output_chain(r,cglcf,str);
 
-	ngx_https_ubus_send_header(r,NGX_OK,strlen(str));
+	ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,strlen(str));
 	ngx_https_ubus_send_body(r,cglcf);
 }
 
@@ -685,8 +797,8 @@ ngx_http_ubus_handler(ngx_http_request_t *r)
 	{
 		case NGX_HTTP_OPTIONS:
 			r->header_only = 1;
-			ngx_https_ubus_send_header(r,NGX_OK,0);
-			ngx_http_finalize_request(r,NGX_OK);
+			ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,0);
+			ngx_http_finalize_request(r,NGX_HTTP_OK);
 			return NGX_OK;
 
 		case NGX_HTTP_POST:
@@ -707,7 +819,7 @@ ngx_http_ubus_handler(ngx_http_request_t *r)
 				return NGX_OK;
 			}
 
-			rc = ngx_https_ubus_send_header(r,NGX_OK,cglcf->res_len);
+			rc = ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,cglcf->res_len);
 			if (rc == NGX_ERROR || rc > NGX_OK) {
 				return rc;
 			}
