@@ -20,7 +20,6 @@ struct dispatch_ubus {
 	struct json_tokener *jstok;
 	struct json_object *jsobj;
 	struct json_object *jsobj_cur;
-	int post_len;
 
 	uint32_t obj;
 	const char *func;
@@ -41,7 +40,6 @@ typedef struct {
 		ngx_uint_t script_timeout;
 		ngx_flag_t noauth;
 		ngx_flag_t enable;
-		ngx_uint_t req_len;
 		ngx_uint_t res_len;
 		ngx_chain_t* out_chain;
 		ngx_chain_t* out_chain_start;
@@ -199,7 +197,7 @@ static const struct {
 };
 
 static void ubus_single_error(ngx_http_request_t *r, enum rpc_error type);
-static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len);
+static ngx_int_t ngx_http_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len);
 
 static bool parse_json_rpc(struct rpc_data *d, struct blob_attr *data)
 {
@@ -587,22 +585,42 @@ static ngx_int_t ngx_http_ubus_elaborate_req(ngx_http_request_t *r)
 	}
 }
 
-static void ngx_http_ubus_read_req(ngx_http_request_t *r)
+static ngx_int_t ngx_http_ubus_send_body(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf)
 {
+	cglcf->out_chain->buf->last_buf = 1;
+	cglcf->ubus->jsobj = NULL;
+	cglcf->ubus->jstok = json_tokener_new();
+
+	return ngx_http_output_filter(r, cglcf->out_chain_start);
+}
+
+static void ngx_http_ubus_req_handler(ngx_http_request_t *r)
+{
+	ngx_int_t     rc;
 	off_t pos = 0;
 	off_t len;
 	ngx_chain_t  *in;
 	ngx_http_ubus_loc_conf_t  *cglcf;
+	struct dispatch_ubus *du;
 	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
-	char *buffer = ngx_pcalloc(r->pool, cglcf->req_len);
-	struct dispatch_ubus *du = cglcf->ubus;
+	char *buffer = ngx_pcalloc(r->pool, r->headers_in.content_length_n + 1);
 	
-	if (du->jsobj || !du->jstok) {
+	cglcf->ubus = ngx_pcalloc(r->pool,sizeof(struct dispatch_ubus));
+	cglcf->buf = ngx_pcalloc(r->pool,sizeof(struct blob_buf));
+
+	cglcf->ubus->jsobj = NULL;
+	cglcf->ubus->jstok = json_tokener_new();
+
+	blob_buf_init(cglcf->buf, 0);
+
+	if (cglcf->ubus->jsobj || !cglcf->ubus->jstok) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Error ubus struct not ok");
 		ubus_single_error(r, ERROR_PARSE);
 		ngx_http_finalize_request(r, NGX_HTTP_OK);
-		return;
+		return NGX_HTTP_OK;
 	}
+
+	du = cglcf->ubus;
 
 	for (in = r->request_body->bufs; in; in = in->next) {
 
@@ -619,9 +637,36 @@ static void ngx_http_ubus_read_req(ngx_http_request_t *r)
 		}
 	}
 
+	if ( pos != r->headers_in.content_length_n ) {
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "Readed buffer differ from header request len");
+		ubus_single_error(r, ERROR_PARSE);
+		ngx_pfree(r->pool,buffer);
+		ngx_http_finalize_request(r, NGX_HTTP_OK);
+		return;
+	}
+
 	du->jsobj = json_tokener_parse_ex(du->jstok, buffer, pos);
 	ngx_pfree(r->pool,buffer);
-	du->post_len = pos;
+
+	rc = ngx_http_ubus_elaborate_req(r);
+	if (rc == NGX_ERROR) {
+		// With ngx_error we are sending json error 
+		// and we say that the request is ok
+		ngx_http_finalize_request(r, NGX_HTTP_OK);
+		return;
+	}
+
+	rc = ngx_http_ubus_send_header(r,cglcf,NGX_HTTP_OK,cglcf->res_len);
+	if (rc == NGX_ERROR || rc > NGX_OK) {
+		ngx_http_finalize_request(r, rc);
+		return;
+	}
+
+	ngx_pfree(r->pool,cglcf->ubus);
+	ngx_pfree(r->pool,cglcf->buf);
+	rc = ngx_http_ubus_send_body(r,cglcf);
+
+	ngx_http_finalize_request(r, rc);
 }
 
 static ngx_int_t set_custom_headers_out(ngx_http_request_t *r, const char *key_str, const char *value_str) {
@@ -729,7 +774,7 @@ static void ubus_add_cors_headers(ngx_http_request_t *r)
 	ngx_pfree(r->pool,cors);
 }
 
-static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len)
+static ngx_int_t ngx_http_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf, ngx_int_t status, ngx_int_t post_len)
 {
 	r->headers_out.status = status;
 	r->headers_out.content_type.len = sizeof("application/json") - 1;
@@ -741,15 +786,6 @@ static ngx_int_t ngx_https_ubus_send_header(ngx_http_request_t *r, ngx_http_ubus
 
 	return ngx_http_send_header(r);
 	
-}
-
-static ngx_int_t ngx_https_ubus_send_body(ngx_http_request_t *r, ngx_http_ubus_loc_conf_t  *cglcf)
-{
-	cglcf->out_chain->buf->last_buf = 1;
-	cglcf->ubus->jsobj = NULL;
-	cglcf->ubus->jstok = json_tokener_new();
-
-	return ngx_http_output_filter(r, cglcf->out_chain_start);
 }
 
 static void ubus_single_error(ngx_http_request_t *r, enum rpc_error type)
@@ -771,8 +807,8 @@ static void ubus_single_error(ngx_http_request_t *r, enum rpc_error type)
 	str = blobmsg_format_json(cglcf->buf->head, true);
 	append_to_output_chain(r,cglcf,str);
 
-	ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,strlen(str));
-	ngx_https_ubus_send_body(r,cglcf);
+	ngx_http_ubus_send_header(r,cglcf,NGX_HTTP_OK,strlen(str));
+	ngx_http_ubus_send_body(r,cglcf);
 }
 
 static ngx_int_t
@@ -787,45 +823,21 @@ ngx_http_ubus_handler(ngx_http_request_t *r)
 	{
 		case NGX_HTTP_OPTIONS:
 			r->header_only = 1;
-			ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,0);
+			ngx_http_ubus_send_header(r,cglcf,NGX_HTTP_OK,0);
 			ngx_http_finalize_request(r,NGX_HTTP_OK);
-			return NGX_OK;
+			return NGX_DONE;
 
 		case NGX_HTTP_POST:
 
 			cglcf->out_chain = NULL;
 			cglcf->res_len = 0;
 
-			cglcf->ubus = ngx_pcalloc(r->pool,sizeof(struct dispatch_ubus));
-			cglcf->buf = ngx_pcalloc(r->pool,sizeof(struct blob_buf));
-
-			cglcf->ubus->jsobj = NULL;
-			cglcf->ubus->jstok = json_tokener_new();
-			blob_buf_init(cglcf->buf, 0);
-
-			cglcf->req_len = r->headers_in.content_length_n;
-
-			rc = ngx_http_read_client_request_body(r, ngx_http_ubus_read_req);
+			rc = ngx_http_read_client_request_body(r, ngx_http_ubus_req_handler);
 			if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
 				return rc;
 			}
 
-			rc = ngx_http_ubus_elaborate_req(r);
-			if (rc == NGX_ERROR) {
-				// With ngx_error we are sending json error 
-				// and we say that the request is ok
-				return NGX_OK;
-			}
-
-			rc = ngx_https_ubus_send_header(r,cglcf,NGX_HTTP_OK,cglcf->res_len);
-			if (rc == NGX_ERROR || rc > NGX_OK) {
-				return rc;
-			}
-
-			ngx_pfree(r->pool,cglcf->ubus);
-			ngx_pfree(r->pool,cglcf->buf);
-
-			return ngx_https_ubus_send_body(r,cglcf);
+			return NGX_DONE;
 
 		default:
 			return NGX_HTTP_BAD_REQUEST;
