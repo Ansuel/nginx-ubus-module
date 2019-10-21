@@ -87,8 +87,8 @@ void ubus_allowed_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 
 void ubus_request_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 {
-	ngx_http_ubus_loc_conf_t *cglcf = (ngx_http_ubus_loc_conf_t *)req->priv;
-	struct dispatch_ubus *du = cglcf->ubus;
+	ubus_ctx_t *ctx = (ubus_ctx_t *)req->priv;
+	struct dispatch_ubus *du = ctx->ubus;
 
 	struct blob_attr *cur;
 	void *r;
@@ -96,11 +96,11 @@ void ubus_request_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 
 	blobmsg_add_field(&du->buf, BLOBMSG_TYPE_TABLE, "", blob_data(msg), blob_len(msg));
 
-	r = blobmsg_open_array(cglcf->buf, "result");
-	blobmsg_add_u32(cglcf->buf, "", type);
+	r = blobmsg_open_array(ctx->buf, "result");
+	blobmsg_add_u32(ctx->buf, "", type);
 	blob_for_each_attr(cur, du->buf.head, rem)
-	blobmsg_add_blob(cglcf->buf, cur);
-	blobmsg_close_array(cglcf->buf, r);
+	blobmsg_add_blob(ctx->buf, cur);
+	blobmsg_close_array(ctx->buf, r);
 }
 
 void ubus_list_cb(struct ubus_context *ctx, struct ubus_object_data *obj, void *priv)
@@ -150,4 +150,13 @@ void ubus_list_cb(struct ubus_context *ctx, struct ubus_object_data *obj, void *
 		blobmsg_close_table(data->buf, t);
 	}
 	blobmsg_close_table(data->buf, o);
+}
+
+void ubus_close_fds(struct ubus_context *ctx)
+{
+	if (ctx->sock.fd < 0)
+		return;
+
+	close(ctx->sock.fd);
+	ctx->sock.fd = -1;
 }

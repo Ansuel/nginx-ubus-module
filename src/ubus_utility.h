@@ -10,25 +10,14 @@
 #include <libubox/avl.h>
 #include <libubox/avl-cmp.h>
 
+#include <pthread.h>
+#include <semaphore.h>
+
 #include <libubus.h>
 #include <json-c/json.h>
 
 #define UBUS_MAX_POST_SIZE	65536
 #define UBUS_DEFAULT_SID	"00000000000000000000000000000000"
-
-typedef struct {
-		ngx_str_t socket_path;
-		ngx_flag_t cors;
-		ngx_uint_t script_timeout;
-		ngx_flag_t noauth;
-		ngx_flag_t enable;
-		ngx_uint_t res_len;
-		ngx_chain_t* out_chain;
-		ngx_chain_t* out_chain_start;
-		struct ubus_context *ctx;
-		struct dispatch_ubus *ubus;
-		struct blob_buf *buf;
-} ngx_http_ubus_loc_conf_t;
 
 struct dispatch_ubus {
 	struct ubus_request req;
@@ -42,6 +31,25 @@ struct dispatch_ubus {
 
 	struct blob_buf buf;
 };
+
+typedef struct {
+	ngx_http_request_t* r;
+	ngx_uint_t res_len;
+	ngx_chain_t* out_chain;
+	ngx_chain_t* out_chain_start;
+	struct ubus_context *ubus_ctx;
+	char** array_res;
+	sem_t* sem;
+} request_ctx_t;
+
+typedef struct {
+	struct blob_buf *buf;
+	struct dispatch_ubus *ubus;
+	json_object *obj;
+	bool array;
+	int index;
+	request_ctx_t *request;
+} ubus_ctx_t;
 
 enum {
 	RPC_JSONRPC,
@@ -82,7 +90,8 @@ struct list_data {
 	struct blob_buf *buf;
 };
 
-enum rpc_error {
+enum rpc_status {
+	REQUEST_OK,
 	ERROR_PARSE,
 	ERROR_REQUEST,
 	ERROR_METHOD,
@@ -99,6 +108,7 @@ static const struct {
 	int code;
 	const char *msg;
 } json_errors[__ERROR_MAX] = {
+	[REQUEST_OK] = { 0, "Request complete correctly" },
 	[ERROR_PARSE] = { -32700, "Parse error" },
 	[ERROR_REQUEST] = { -32600, "Invalid request" },
 	[ERROR_METHOD] = { -32601, "Method not found" },
@@ -115,6 +125,7 @@ void ubus_init_response(struct blob_buf *buf,struct dispatch_ubus *du);
 void ubus_allowed_cb(struct ubus_request *req, int type, struct blob_attr *msg);
 void ubus_request_cb(struct ubus_request *req, int type, struct blob_attr *msg);
 void ubus_list_cb(struct ubus_context *ctx, struct ubus_object_data *obj, void *priv);
+void ubus_close_fds(struct ubus_context *ctx);
 
 
 #endif /* _UBUS_UTILITY_H_INCLUDED_ */
