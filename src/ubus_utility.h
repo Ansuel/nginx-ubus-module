@@ -29,12 +29,12 @@ struct dispatch_ubus {
 	uint32_t obj;
 	const char *func;
 
-	struct blob_buf buf;
+	struct blob_buf *buf;
 };
 
 typedef struct {
 	ngx_http_request_t* r;
-	ngx_uint_t res_len;
+	int res_len;
 	ngx_chain_t* out_chain;
 	ngx_chain_t* out_chain_start;
 	struct ubus_context *ubus_ctx;
@@ -45,7 +45,7 @@ typedef struct {
 typedef struct {
 	struct blob_buf *buf;
 	struct dispatch_ubus *ubus;
-	json_object *obj;
+	struct json_object *obj;
 	bool array;
 	int index;
 	request_ctx_t *request;

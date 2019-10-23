@@ -94,11 +94,11 @@ void ubus_request_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 	void *r;
 	int rem;
 
-	blobmsg_add_field(&du->buf, BLOBMSG_TYPE_TABLE, "", blob_data(msg), blob_len(msg));
+	blobmsg_add_field(du->buf, BLOBMSG_TYPE_TABLE, "", blob_data(msg), blob_len(msg));
 
 	r = blobmsg_open_array(ctx->buf, "result");
 	blobmsg_add_u32(ctx->buf, "", type);
-	blob_for_each_attr(cur, du->buf.head, rem)
+	blob_for_each_attr(cur, du->buf->head, rem)
 	blobmsg_add_blob(ctx->buf, cur);
 	blobmsg_close_array(ctx->buf, r);
 }
