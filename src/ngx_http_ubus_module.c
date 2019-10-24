@@ -351,21 +351,24 @@ static ngx_int_t ngx_http_ubus_send_body(request_ctx_t *request)
 	return rc;
 }
 
-static bool ubus_allowed(struct ubus_context *ctx, ngx_int_t script_timeout, const char *sid, const char *obj, const char *fun)
+static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout, const char *sid, const char *obj, const char *fun)
 {
 	uint32_t id;
 	bool allow = false;
-	static struct blob_buf req;
+	struct blob_buf* req = ngx_pcalloc(ctx->request->r->pool,sizeof(struct blob_buf));
 
-	if (ubus_lookup_id(ctx, "session", &id))
+	if (ubus_lookup_id(ctx->request->ubus_ctx, "session", &id))
 		return false;
 
-	blob_buf_init(&req, 0);
-	blobmsg_add_string(&req, "ubus_rpc_session", sid);
-	blobmsg_add_string(&req, "object", obj);
-	blobmsg_add_string(&req, "function", fun);
+	blob_buf_init(req, 0);
+	blobmsg_add_string(req, "ubus_rpc_session", sid);
+	blobmsg_add_string(req, "object", obj);
+	blobmsg_add_string(req, "function", fun);
 	
-	ubus_invoke(ctx, id, "access", req.head, ubus_allowed_cb, &allow, script_timeout * 500);
+	ubus_invoke(ctx->request->ubus_ctx, id, "access", req->head, ubus_allowed_cb, &allow, script_timeout * 500);
+
+	free(req->buf);
+	ngx_pfree(ctx->request->r->pool,req);
 
 	return allow;
 }
@@ -547,7 +550,7 @@ static enum rpc_status ubus_process_object(ubus_ctx_t *ctx)
 		if (ctx->array)
 			sem_wait(ctx->request->sem);
 
-		if (!cglcf->noauth && !ubus_allowed(ctx->request->ubus_ctx, cglcf->script_timeout, data.sid, data.object, data.function)) {
+		if (!cglcf->noauth && !ubus_allowed(ctx, cglcf->script_timeout, data.sid, data.object, data.function)) {
 			err = ERROR_ACCESS;
 			goto error;
 		}
