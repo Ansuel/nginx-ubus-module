@@ -190,7 +190,6 @@ static void parse_cors_from_header(ngx_http_request_t *r,
             found_count++;
         } else if (ngx_strcmp("access-control-request-headers",
                 h[i].key.data)) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "ok3");
             cors->ACCESS_CONTROL_REQUEST_HEADERS = h[i].key.data;
             found_count++;
         }
@@ -240,24 +239,11 @@ static ngx_int_t ngx_http_ubus_send_header(
     return ngx_http_send_header(r);
 }
 
-static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
+static char* ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
     void *c;
     char *str;
-
     struct blob_buf* buf = ngx_pcalloc(request->r->pool,
         sizeof(struct blob_buf));
-
-    ngx_http_ubus_loc_conf_t  *cglcf;
-    cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
-
-    ngx_log_error(NGX_LOG_ERR, request->r->connection->log, 0,
-                      "Request generated error: %s",
-                      json_errors[type].msg);
-
-    request->res_len = 0;
-
-    if (request->ubus_ctx)
-        ubus_close_fds(request->ubus_ctx);
 
     struct dispatch_ubus *du = ngx_pcalloc(request->r->pool,
         sizeof(struct dispatch_ubus));
@@ -274,12 +260,31 @@ static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
     free_output_chain(request->r, request->out_chain_start);
 
     str = blobmsg_format_json(buf->head, true);
-    append_to_output_chain(request, str);
-    free(str);
 
     ngx_pfree(request->r->pool, du);
     free(buf->buf);
     ngx_pfree(request->r->pool, buf);
+
+    return str;
+}
+
+static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
+    ngx_http_ubus_loc_conf_t  *cglcf;
+    char *str;
+    cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
+
+    ngx_log_error(NGX_LOG_ERR, request->r->connection->log, 0,
+                      "Request generated error: %s",
+                      json_errors[type].msg);
+
+    request->res_len = 0;
+
+    if (request->ubus_ctx)
+        ubus_close_fds(request->ubus_ctx);
+
+    str = ubus_gen_error(request, type);
+    append_to_output_chain(request, str);
+    free(str);
 
     ngx_http_ubus_send_header(request->r, cglcf, NGX_HTTP_OK, request->res_len);
     ngx_http_ubus_send_body(request);
@@ -387,6 +392,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
     ubus_ctx_t *ctx, const char *sid, struct blob_attr *args) {
     ngx_http_ubus_loc_conf_t  *cglcf;
     cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
+    enum rpc_status rc = REQUEST_OK;
 
     struct dispatch_ubus *du = ctx->ubus;
     struct blob_attr *cur;
@@ -403,7 +409,8 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
     blobmsg_for_each_attr(cur, args, rem) {
         if (!strcmp(blobmsg_name(cur), "ubus_rpc_session")) {
-            return ERROR_PARAMS;
+            rc = ERROR_PARAMS;
+            goto out;
         }
         blobmsg_add_blob(req, cur);
     }
@@ -419,16 +426,10 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
     ubus_invoke(request->ubus_ctx, du->obj, du->func, req->head,
      ubus_request_cb, ctx, cglcf->script_timeout * 1000);
 
-    free(req->buf);
-    ngx_pfree(request->r->pool, req);
-
     if (ctx->array)
         sem_post(request->sem);
 
     str = blobmsg_format_json(ctx->buf->head, true);
-
-    free(du->buf->buf);
-    ngx_pfree(request->r->pool, du->buf);
 
     if (ctx->array) {
         ctx->request->array_res[ctx->index] = str;
@@ -437,7 +438,14 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
         free(str);
     }
 
-    return REQUEST_OK;
+out:
+    free(req->buf);
+    ngx_pfree(request->r->pool, req);
+
+    free(du->buf->buf);
+    ngx_pfree(request->r->pool, du->buf);
+
+    return rc;
 }
 
 static enum rpc_status ubus_send_list(request_ctx_t *request,
@@ -457,39 +465,31 @@ static enum rpc_status ubus_send_list(request_ctx_t *request,
 
     ubus_init_response(ctx->buf, du);
 
+    if (ctx->array)
+        sem_wait(request->sem);
+
+    r = blobmsg_open_array(data.buf, "result");
+
     if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
-        r = blobmsg_open_array(data.buf, "result");
-
-        if (ctx->array)
-            sem_wait(request->sem);
-
         ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, &data);
-
-        if (ctx->array)
-            sem_post(request->sem);
-
-        blobmsg_close_array(data.buf, r);
     } else {
-        r = blobmsg_open_table(data.buf, "result");
         dup = blob_memdup(params);
         if (dup) {
             rem = blobmsg_data_len(dup);
             data.verbose = true;
+
             __blob_for_each_attr(cur, blobmsg_data(dup), rem)
-
-            if (ctx->array)
-                sem_wait(request->sem);
-
                 ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
                     ubus_list_cb, &data);
 
-            if (ctx->array)
-                sem_post(request->sem);
-
             free(dup);
         }
-        blobmsg_close_table(data.buf, r);
     }
+
+    blobmsg_close_table(data.buf, r);
+
+    if (ctx->array)
+        sem_post(request->sem);
 
     blobmsg_add_blob(ctx->buf, blob_data(data.buf->head));
 
@@ -513,7 +513,6 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
         "Start processing json object");
 
     enum rpc_status rc = REQUEST_OK;
-    enum rpc_status *res;
     bool array = ctx->array;
     request_ctx_t *request = ctx->request;
 
@@ -572,6 +571,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
     } else if (!strcmp(data.method, "list")) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
             "Start processing list request");
+
         rc = ubus_send_list(request, ctx, data.params);
         goto out;
     } else {
@@ -593,9 +593,12 @@ out:
     free_ubus_ctx_t(ctx, request->r);
 
     if (array) {
-        res = ngx_pcalloc(request->r->pool, sizeof(enum rpc_status));
-        ngx_memcpy(res, &rc, sizeof(enum rpc_status));
-        pthread_exit(res);
+        if ( rc != REQUEST_OK ) {
+            ctx->request->array_res[ctx->index] = ubus_gen_error(ctx->request,
+                rc);
+        }
+
+        pthread_exit(NULL);
     }
 
     return rc;
@@ -622,10 +625,6 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
     int concurrent;
     int concurrent_thread = cglcf->parallel_req;
     int threads_spawned;
-
-    enum rpc_status** res = ngx_pcalloc(request->r->pool,
-        concurrent_thread * sizeof(enum rpc_status*));
-    enum rpc_status err = REQUEST_OK;
 
     pthread_t* threads = ngx_pcalloc(request->r->pool,
         concurrent_thread * sizeof(pthread_t));
@@ -661,40 +660,28 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
         for (concurrent = 0 ; concurrent < threads_spawned ; concurrent++) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
                "Waiting thread %d to finish", concurrent);
-            pthread_join(threads[concurrent], (void**) &res[concurrent]);
 
-            if (*res[concurrent] != REQUEST_OK)
-                err = *res[concurrent];
-
-            ngx_pfree(request->r->pool, res[concurrent]);
+            pthread_join(threads[concurrent], NULL);
         }
-
-        if (err != REQUEST_OK)
-            break;
     }
 
     ngx_pfree(request->r->pool, threads);
-    ngx_pfree(request->r->pool, res);
 
-    if (err) {
-        ubus_single_error(request, err);
-        rc = NGX_ERROR;
+    append_to_output_chain(request, "[");
 
-    } else {
-        append_to_output_chain(request, "[");
-
-        for (concurrent = 0 ; concurrent < len ; concurrent++) {
-            ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
-               "Writing output of index %d to body", concurrent);
-            if ( concurrent > 0 )
-                append_to_output_chain(request, ",");
-
-            append_to_output_chain(request, request->array_res[concurrent]);
-            free(request->array_res[concurrent]);
-        }
-
-        append_to_output_chain(request, "]");
+    for (concurrent = 0 ; concurrent < len ; concurrent++) {
+        ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
+           "Writing output of index %d to body", concurrent);
+        if ( concurrent > 0 )
+            append_to_output_chain(request, ",");
+        if (!request->array_res[concurrent])
+            request->array_res[concurrent] = ubus_gen_error(request,
+                ERROR_INTERNAL);
+        append_to_output_chain(request, request->array_res[concurrent]);
+        free(request->array_res[concurrent]);
     }
+
+    append_to_output_chain(request, "]");
 
     ngx_pfree(request->r->pool, request->array_res);
 
