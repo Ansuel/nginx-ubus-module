@@ -239,6 +239,12 @@ static ngx_int_t ngx_http_ubus_send_header(
     return ngx_http_send_header(r);
 }
 
+static void ubus_gen_err_res(ubus_ctx_t *ctx, int err) {
+    void *r = blobmsg_open_array(ctx->buf, "result");
+    blobmsg_add_u32(ctx->buf, "", err);
+    blobmsg_close_array(ctx->buf, r);
+}
+
 static char* ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
     void *c;
     char *str;
@@ -418,16 +424,18 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
     blobmsg_add_string(req, "ubus_rpc_session", sid);
 
     blob_buf_init(du->buf, 0);
-    memset(&du->req, 0, sizeof(du->req));
 
     if (ctx->array)
         sem_wait(request->sem);
 
-    ubus_invoke(request->ubus_ctx, du->obj, du->func, req->head,
+    ret = ubus_invoke(request->ubus_ctx, du->obj, du->func, req->head,
      ubus_request_cb, ctx, cglcf->script_timeout * 1000);
 
     if (ctx->array)
         sem_post(request->sem);
+
+    if (ret > 0)
+        ubus_gen_err_res(ctx, ret);
 
     str = blobmsg_format_json(ctx->buf->head, true);
 
@@ -468,11 +476,12 @@ static enum rpc_status ubus_send_list(request_ctx_t *request,
     if (ctx->array)
         sem_wait(request->sem);
 
-    r = blobmsg_open_array(data.buf, "result");
-
     if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
+        r = blobmsg_open_array(data.buf, "result");
         ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, &data);
+        blobmsg_close_array(data.buf, r);
     } else {
+        r = blobmsg_open_table(data.buf, "result");
         dup = blob_memdup(params);
         if (dup) {
             rem = blobmsg_data_len(dup);
@@ -484,9 +493,8 @@ static enum rpc_status ubus_send_list(request_ctx_t *request,
 
             free(dup);
         }
+        blobmsg_close_table(data.buf, r);
     }
-
-    blobmsg_close_table(data.buf, r);
 
     if (ctx->array)
         sem_post(request->sem);
