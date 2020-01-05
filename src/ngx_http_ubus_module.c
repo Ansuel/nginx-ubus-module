@@ -239,12 +239,6 @@ static ngx_int_t ngx_http_ubus_send_header(
     return ngx_http_send_header(r);
 }
 
-static void ubus_gen_err_res(ubus_ctx_t *ctx, int err) {
-    void *r = blobmsg_open_array(ctx->buf, "result");
-    blobmsg_add_u32(ctx->buf, "", err);
-    blobmsg_close_array(ctx->buf, r);
-}
-
 static char* ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
     void *c;
     char *str;
@@ -408,6 +402,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
     int ret, rem;
 
     char *str;
+    void *r;
 
     blob_buf_init(req, 0);
 
@@ -434,8 +429,14 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
     if (ctx->array)
         sem_post(request->sem);
 
-    if (ret > 0)
-        ubus_gen_err_res(ctx, ret);
+    r = blobmsg_open_array(ctx->buf, "result");
+    blobmsg_add_u32(ctx->buf, "", ret);
+
+    if (ret == 0)
+        blob_for_each_attr(cur, du->buf->head, rem)
+            blobmsg_add_blob(ctx->buf, cur);
+
+    blobmsg_close_array(ctx->buf, r);
 
     str = blobmsg_format_json(ctx->buf->head, true);
 

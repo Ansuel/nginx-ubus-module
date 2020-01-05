@@ -94,20 +94,8 @@ void ubus_request_cb(struct ubus_request *req, int type,
     ubus_ctx_t *ctx = (ubus_ctx_t *)req->priv;
     struct dispatch_ubus *du = ctx->ubus;
 
-    struct blob_attr *cur;
-    void *r;
-    int rem;
-
     blobmsg_add_field(du->buf, BLOBMSG_TYPE_TABLE, "",
         blob_data(msg), blob_len(msg));
-
-    r = blobmsg_open_array(ctx->buf, "result");
-    // Hard code ret code 0 since we are not using
-    // async request since the request has completed
-    blobmsg_add_u32(ctx->buf, "", 0);
-    blob_for_each_attr(cur, du->buf->head, rem)
-        blobmsg_add_blob(ctx->buf, cur);
-    blobmsg_close_array(ctx->buf, r);
 }
 
 void ubus_list_cb(struct ubus_context *ctx,
