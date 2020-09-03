@@ -518,12 +518,12 @@ static enum rpc_status ubus_send_list(request_ctx_t *request,
 }
 
 static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
-        "Start processing json object");
-
     enum rpc_status rc = REQUEST_OK;
     bool array = ctx->array;
     request_ctx_t *request = ctx->request;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
+        "Start processing json object");
 
     ngx_http_ubus_loc_conf_t  *cglcf;
     cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
