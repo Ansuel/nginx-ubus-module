@@ -433,11 +433,12 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
   void *r;
   int rem;
   char *str;
+  struct list_data data = {0};
   struct blob_attr *cur, *dup;
   struct dispatch_ubus *du = ctx->ubus;
-  struct list_data data = {.buf = du->buf, .verbose = false};
 
   du->buf = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
+  data.buf = du->buf;
 
   blob_buf_init(data.buf, 0);
 
