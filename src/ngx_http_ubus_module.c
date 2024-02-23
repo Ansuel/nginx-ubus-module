@@ -753,6 +753,16 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 
   for (in = r->request_body->bufs; in; in = in->next) {
     len = ngx_buf_size(in->buf);
+
+    if (!in->buf->pos) {
+      ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                    "Request too big for request buffer. "
+		    "Set client_body_buffer_size at least to %dk",
+		    (len / 1024) + 1);
+      ubus_single_error(request, ERROR_PARSE);
+      goto free_buf;
+    }
+
     ngx_memcpy(buffer + pos, in->buf->pos, len);
     pos += len;
 
