@@ -287,6 +287,8 @@ static ngx_int_t append_to_output_chain(request_ctx_t *request,
     request->out_chain->next = out_aux;
     request->out_chain = out_aux;
   }
+
+  return NGX_OK;
 }
 
 static void setup_ubus_ctx_t(ubus_ctx_t *ctx, request_ctx_t *request,
