@@ -177,8 +177,6 @@ static void ubus_add_cors_headers(ngx_http_request_t *r) {
   cors = ngx_pcalloc(r->pool, sizeof(struct cors_data));
   parse_cors_from_header(r, cors);
 
-  char *req;
-
   if (!cors->ORIGIN)
     return;
 
@@ -870,7 +868,6 @@ static char *ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent,
                                           void *child) {
   ngx_http_ubus_loc_conf_t *prev = parent;
   ngx_http_ubus_loc_conf_t *conf = child;
-  struct ubus_context *test_ubus;
 
   // Skip merge of other, if we don't have a socket to connect...
   // We don't init the module at all.
