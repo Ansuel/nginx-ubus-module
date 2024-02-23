@@ -104,7 +104,7 @@ static ngx_int_t set_custom_headers_out(ngx_http_request_t *r,
   ngx_str_t value;
   ngx_str_t key;
 
-  char *tmp;
+  unsigned char *tmp;
   int len;
 
   len = strlen(key_str);
@@ -159,13 +159,13 @@ static void parse_cors_from_header(ngx_http_request_t *r,
     }
 
     if (ngx_strcmp("origin", h[i].key.data)) {
-      cors->ORIGIN = h[i].key.data;
+      cors->ORIGIN = (char *)h[i].key.data;
       found_count++;
     } else if (ngx_strcmp("access-control-request-method", h[i].key.data)) {
-      cors->ACCESS_CONTROL_REQUEST_METHOD = h[i].key.data;
+      cors->ACCESS_CONTROL_REQUEST_METHOD = (char *)h[i].key.data;
       found_count++;
     } else if (ngx_strcmp("access-control-request-headers", h[i].key.data)) {
-      cors->ACCESS_CONTROL_REQUEST_HEADERS = h[i].key.data;
+      cors->ACCESS_CONTROL_REQUEST_HEADERS = (char *)h[i].key.data;
       found_count++;
     }
   }
@@ -266,7 +266,7 @@ static ngx_int_t append_to_output_chain(request_ctx_t *request,
   ngx_buf_t *b;
   ngx_int_t len = strlen(str);
 
-  char *data = ngx_pcalloc(request->r->pool, len);
+  unsigned char *data = ngx_pcalloc(request->r->pool, len);
   ngx_memcpy(data, str, len);
 
   b = ngx_pcalloc(request->r->pool, sizeof(ngx_buf_t));
@@ -725,7 +725,7 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
   request = ngx_pcalloc(r->pool, sizeof(request_ctx_t));
   request->r = r;
 
-  request->ubus_ctx = ubus_connect(cglcf->socket_path.data);
+  request->ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
 
   if (!request->ubus_ctx) {
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
