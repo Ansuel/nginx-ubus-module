@@ -1,0 +1,66 @@
+name: Build NGINX Module
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-backports:
+    name: Build NGINX Module
+    runs-on: ubuntu-latest
+
+    container:
+      image: alpine:latest
+
+    steps:
+      - name: Install Dependencies
+        run: |
+          apk update && apk add git cmake make gcc musl-dev pkgconfig json-c-dev curl pcre-dev zlib-dev
+
+      - name: Install libubox
+        run: |
+          git clone	--depth=1 https://git.openwrt.org/project/libubox.git
+
+          cd libubox
+          cmake -DBUILD_LUA=OFF -DBUILD_EXAMPLES=OFF
+          make
+          make install
+
+      - name: Install libubus
+        run: |
+          git clone	--depth=1 https://git.openwrt.org/project/ubus.git
+
+          cd ubus
+          cmake -DBUILD_LUA=OFF -DBUILD_EXAMPLES=OFF
+          make
+          make install
+
+      # From: https://stackoverflow.com/questions/22510705/get-the-latest-download-link-programmatically
+      - name: Determine latest NGINX version
+        id: determine_nginx_version
+        run: |
+          # Determine the latest stable version's download URL, assumed to be 
+          # the first `/download/nginx-*.tar.gz`-like link following the header 
+          # "Stable version".
+          NGINX_VERSION=$(curl -s 'http://nginx.org/en/download.html' | 
+            sed 's/</\'$'\n''</g' | sed -n '/>Stable version$/,$ p' | 
+            egrep -m1 -o '/download/nginx-.+\.tar\.gz' |
+            sed 's/^\/download\/nginx-//' | sed 's/\.tar.gz$//')
+
+          echo "nginx_version=$NGINX_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: nginx-ubus-mod
+
+      - name: Compile Nginx
+        env:
+          NGINX_VERSION: ${{ steps.determine_nginx_version.outputs.nginx_version }}
+        run: |
+          curl "http://nginx.org/download/nginx-${{ env.NGINX_VERSION }}.tar.gz" > nginx-${{ env.NGINX_VERSION }}.tar.gz
+          tar -xf nginx-${{ env.NGINX_VERSION }}.tar.gz
+
+          cd nginx-${{ env.NGINX_VERSION }}
+          ./configure --add-dynamic-module=../nginx-ubus-mod
+          make modules
