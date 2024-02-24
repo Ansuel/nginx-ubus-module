@@ -562,6 +562,11 @@ out:
 			*ctx->res_str = ubus_gen_error(ctx->request, rc);
 		}
 
+		/* Signal thread has finished */
+		sem_post(ctx->request->avail_thread);
+		/* Signal obj has been processed */
+		sem_post(ctx->request->obj_processed);
+
 		pthread_exit(NULL);
 	}
 
@@ -572,83 +577,77 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 				    struct json_object *obj) {
 	char **res_strs;
 	ubus_ctx_t *ctx;
-	pthread_t *threads;
+	int len, obj_num = 0;
 	ngx_int_t rc = NGX_OK;
 	ngx_http_ubus_loc_conf_t *cglcf;
-	int len = json_object_array_length(obj);
-	sem_t *sem = ngx_pcalloc(request->r->pool, sizeof(sem_t));
-	int obj_done = 0, concurrent, concurrent_thread, threads_spawned;
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Start processing array json object");
 
-	concurrent_thread = cglcf->parallel_req;
+	request->sem = ngx_pcalloc(request->r->pool, sizeof(*request->sem));
+	request->avail_thread = ngx_pcalloc(request->r->pool, sizeof(*request->avail_thread));
+	request->obj_processed = ngx_pcalloc(request->r->pool, sizeof(*request->obj_processed));
 
-	sem_init(sem, 0, 1);
+	sem_init(request->sem, 0, 1);
+	sem_init(request->avail_thread, 0, cglcf->parallel_req);
+	sem_init(request->obj_processed, 0, 0);
 
-	request->sem = sem;
-
-	threads =
-	ngx_pcalloc(request->r->pool, concurrent_thread * sizeof(pthread_t));
+	len = json_object_array_length(obj);
 	res_strs = ngx_pcalloc(request->r->pool, len * sizeof(*res_strs));
 
-	while (obj_done < len) {
-		threads_spawned = 0;
+	for (obj_num = 0; obj_num < len; obj_num++) {
+		struct json_object *obj_tmp;
+		pthread_t thread = { 0 };
 
-		for (concurrent = 0; concurrent < concurrent_thread; concurrent++) {
-			struct json_object *obj_tmp;
+		/* Wait for an available thread if all busy */
+		sem_wait(request->avail_thread);
 
-			if (obj_done >= len)
-				break;
+		obj_tmp = json_object_array_get_idx(obj, obj_num);
 
-			obj_tmp = json_object_array_get_idx(obj, obj_done);
+		ngx_log_debug2(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
+			       "Spawning thread %d to process request %d", concurrent,
+			       obj_num);
 
-			ngx_log_debug2(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
-				       "Spawning thread %d to process request %d", concurrent,
-				       obj_done);
+		ctx = ngx_pcalloc(request->r->pool, sizeof(ubus_ctx_t));
 
-			ctx = ngx_pcalloc(request->r->pool, sizeof(ubus_ctx_t));
+		setup_ubus_ctx_t(ctx, request, obj_tmp);
 
-			setup_ubus_ctx_t(ctx, request, obj_tmp);
+		ctx->array = true;
+		ctx->res_str = res_strs + obj_num;
 
-			ctx->array = true;
-			ctx->res_str = res_strs + obj_done;
-
-			pthread_create(&threads[concurrent], NULL, (void *)ubus_post_object, ctx);
-			threads_spawned++;
-			obj_done++;
-		}
-
-		for (concurrent = 0; concurrent < threads_spawned; concurrent++) {
-			ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
-				       "Waiting thread %d to finish", concurrent);
-
-			pthread_join(threads[concurrent], NULL);
-		}
+		pthread_create(&thread, NULL, (void *)ubus_post_object, ctx);
 	}
 
-	ngx_pfree(request->r->pool, threads);
+	/* Loop len time to make sure every thread completed and
+	 * every obj has been processed.
+	 */
+	for (obj_num = 0; obj_num < len; obj_num++)
+		sem_wait(request->obj_processed);
 
 	append_to_output_chain(request, "[");
 
-	for (concurrent = 0; concurrent < len; concurrent++) {
+	for (obj_num = 0; obj_num < len; obj_num++) {
 		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Writing output of index %d to body", concurrent);
-		if (concurrent > 0)
+		if (obj_num > 0)
 			append_to_output_chain(request, ",");
-		if (!res_strs[concurrent])
-			res_strs[concurrent] = ubus_gen_error(request, ERROR_INTERNAL);
-		append_to_output_chain(request, res_strs[concurrent]);
-		free(res_strs[concurrent]);
+		if (!res_strs[obj_num])
+			res_strs[obj_num] = ubus_gen_error(request, ERROR_INTERNAL);
+		append_to_output_chain(request, res_strs[obj_num]);
+		free(res_strs[obj_num]);
 	}
 
 	append_to_output_chain(request, "]");
 
 	ngx_pfree(request->r->pool, res_strs);
 
-	sem_destroy(sem);
-	ngx_pfree(request->r->pool, sem);
+	sem_destroy(request->sem);
+	ngx_pfree(request->r->pool, request->sem);
+	sem_destroy(request->avail_thread);
+	ngx_pfree(request->r->pool, request->avail_thread);
+	sem_destroy(request->obj_processed);
+	ngx_pfree(request->r->pool, request->obj_processed);
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Request processed correctly");
