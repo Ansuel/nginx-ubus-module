@@ -368,7 +368,6 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 					 ubus_ctx_t *ctx, const char *sid,
 					 struct blob_attr *args) {
 	void *r;
-	char *str;
 	int ret, rem;
 	struct blob_attr *cur;
 	enum rpc_status rc = REQUEST_OK;
@@ -412,14 +411,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
 	blobmsg_close_array(ctx->buf, r);
 
-	str = blobmsg_format_json(ctx->buf->head, true);
-
-	if (ctx->array) {
-		ctx->request->array_res[ctx->index] = str;
-	} else {
-		append_to_output_chain(request, str);
-		free(str);
-	}
+	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
 out:
 	free(req->buf);
@@ -436,7 +428,6 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	void *r;
 	int rem;
-	char *str;
 	struct list_data data = {0};
 	struct blob_attr *cur, *dup;
 	struct dispatch_ubus *du = ctx->ubus;
@@ -475,17 +466,10 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	blobmsg_add_blob(ctx->buf, blob_data(data.buf->head));
 
-	str = blobmsg_format_json(ctx->buf->head, true);
+	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
 	free(du->buf->buf);
 	ngx_pfree(request->r->pool, du->buf);
-
-	if (ctx->array) {
-		ctx->request->array_res[ctx->index] = str;
-	} else {
-		append_to_output_chain(request, str);
-		free(str);
-	}
 
 	return REQUEST_OK;
 }
@@ -575,7 +559,7 @@ out:
 
 	if (array) {
 		if (rc != REQUEST_OK) {
-			ctx->request->array_res[ctx->index] = ubus_gen_error(ctx->request, rc);
+			*ctx->res_str = ubus_gen_error(ctx->request, rc);
 		}
 
 		pthread_exit(NULL);
@@ -586,6 +570,7 @@ out:
 
 static ngx_int_t ubus_process_array(request_ctx_t *request,
 				    struct json_object *obj) {
+	char **res_strs;
 	ubus_ctx_t *ctx;
 	pthread_t *threads;
 	ngx_int_t rc = NGX_OK;
@@ -606,7 +591,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 
 	threads =
 	ngx_pcalloc(request->r->pool, concurrent_thread * sizeof(pthread_t));
-	request->array_res = ngx_pcalloc(request->r->pool, len * sizeof(char *));
+	res_strs = ngx_pcalloc(request->r->pool, len * sizeof(*res_strs));
 
 	while (obj_done < len) {
 		threads_spawned = 0;
@@ -628,7 +613,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			setup_ubus_ctx_t(ctx, request, obj_tmp);
 
 			ctx->array = true;
-			ctx->index = obj_done;
+			ctx->res_str = res_strs + obj_done;
 
 			pthread_create(&threads[concurrent], NULL, (void *)ubus_post_object, ctx);
 			threads_spawned++;
@@ -652,15 +637,15 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Writing output of index %d to body", concurrent);
 		if (concurrent > 0)
 			append_to_output_chain(request, ",");
-		if (!request->array_res[concurrent])
-			request->array_res[concurrent] = ubus_gen_error(request, ERROR_INTERNAL);
-		append_to_output_chain(request, request->array_res[concurrent]);
-		free(request->array_res[concurrent]);
+		if (!res_strs[concurrent])
+			res_strs[concurrent] = ubus_gen_error(request, ERROR_INTERNAL);
+		append_to_output_chain(request, res_strs[concurrent]);
+		free(res_strs[concurrent]);
 	}
 
 	append_to_output_chain(request, "]");
 
-	ngx_pfree(request->r->pool, request->array_res);
+	ngx_pfree(request->r->pool, res_strs);
 
 	sem_destroy(sem);
 	ngx_pfree(request->r->pool, sem);
@@ -673,12 +658,15 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 
 static ngx_int_t ubus_process_object(request_ctx_t *request,
 				     struct json_object *obj) {
+	char **res_str;
 	ubus_ctx_t *ctx;
 	enum rpc_status rc;
 
 	ctx = ngx_pcalloc(request->r->pool, sizeof(ubus_ctx_t));
+	res_str = ngx_pcalloc(request->r->pool, sizeof(*res_str));
 
 	setup_ubus_ctx_t(ctx, request, obj);
+	ctx->res_str = res_str;
 
 	rc = ubus_post_object(ctx);
 
@@ -687,6 +675,9 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 		return NGX_ERROR;
 	}
 
+	append_to_output_chain(request, *res_str);
+
+	ngx_pfree(request->r->pool, res_str);
 	return NGX_OK;
 }
 

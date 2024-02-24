@@ -46,7 +46,6 @@ typedef struct {
 	ngx_chain_t *out_chain;
 	ngx_chain_t *out_chain_start;
 	struct ubus_context *ubus_ctx;
-	char **array_res;
 	sem_t *sem;
 } request_ctx_t;
 
@@ -55,7 +54,7 @@ typedef struct {
 	struct dispatch_ubus *ubus;
 	struct json_object *obj;
 	bool array;
-	int index;
+	char **res_str;
 	request_ctx_t *request;
 } ubus_ctx_t;
 
