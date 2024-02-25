@@ -94,9 +94,6 @@ static void ubus_single_error(request_ctx_t *request, enum rpc_status type);
 static ngx_int_t ngx_http_ubus_send_body(request_ctx_t *request);
 static ngx_int_t append_to_output_chain(request_ctx_t *request,
 					const char *str);
-static void setup_ubus_ctx_t(ubus_ctx_t *ctx, request_ctx_t *request,
-			     json_object *obj);
-static void free_ubus_ctx_t(ubus_ctx_t *ctx, ngx_http_request_t *r);
 static void free_output_chain(ngx_http_request_t *r, ngx_chain_t *chain);
 
 static ngx_int_t set_custom_headers_out(ngx_http_request_t *r,
@@ -294,14 +291,19 @@ static ngx_int_t append_to_output_chain(request_ctx_t *request,
 	return NGX_OK;
 }
 
-static void setup_ubus_ctx_t(ubus_ctx_t *ctx, request_ctx_t *request,
-			     struct json_object *obj) {
-	ctx->ubus = ngx_pcalloc(request->r->pool, sizeof(struct dispatch_ubus));
-	ctx->buf = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
+static ubus_ctx_t *setup_ubus_ctx_t(request_ctx_t *request,
+				   struct json_object *obj) {
+	ubus_ctx_t *ctx;
+
+	ctx = ngx_pcalloc(request->r->pool, sizeof(*ctx));
+	ctx->ubus = ngx_pcalloc(request->r->pool, sizeof(*ctx->ubus));
+	ctx->buf = ngx_pcalloc(request->r->pool, sizeof(*ctx->buf));
 	ctx->request = request;
 	ctx->obj = obj;
 	ctx->ubus->jsobj = NULL;
 	ctx->ubus->jstok = json_tokener_new();
+
+	return ctx;
 }
 
 static void free_ubus_ctx_t(ubus_ctx_t *ctx, ngx_http_request_t *r) {
@@ -607,9 +609,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Spawning thread %d to process request %d", concurrent,
 			       obj_num);
 
-		ctx = ngx_pcalloc(request->r->pool, sizeof(ubus_ctx_t));
-
-		setup_ubus_ctx_t(ctx, request, obj_tmp);
+		ctx = setup_ubus_ctx_t(request, obj_tmp);
 
 		ctx->array = true;
 		ctx->res_str = res_strs + obj_num;
@@ -659,10 +659,9 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 	ubus_ctx_t *ctx;
 	enum rpc_status rc;
 
-	ctx = ngx_pcalloc(request->r->pool, sizeof(ubus_ctx_t));
 	res_str = ngx_pcalloc(request->r->pool, sizeof(*res_str));
 
-	setup_ubus_ctx_t(ctx, request, obj);
+	ctx = setup_ubus_ctx_t(request, obj);
 	ctx->res_str = res_str;
 
 	rc = ubus_post_object(ctx);
