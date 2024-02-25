@@ -347,10 +347,10 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	bool allow = false;
 	uint32_t id;
 
-	req = ngx_pcalloc(ctx->request->r->pool, sizeof(*req));
-
 	if (ubus_lookup_id(ctx->request->ubus_ctx, "session", &id))
 		return false;
+
+	req = ngx_pcalloc(ctx->request->r->pool, sizeof(*req));
 
 	blob_buf_init(req, 0);
 	blobmsg_add_string(req, "ubus_rpc_session", sid);
