@@ -231,7 +231,7 @@ static char *ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
 	str = blobmsg_format_json(buf->head, true);
 
 	free_output_chain(request->r, request->out_chain_start);
-	free(buf->buf);
+	blob_buf_free(buf);
 	ngx_pfree(request->r->pool, buf);
 	ngx_pfree(request->r->pool, du);
 
@@ -360,7 +360,7 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	ubus_invoke(ctx->request->ubus_ctx, id, "access", req->head, ubus_allowed_cb,
 		    &allow, script_timeout * 500);
 
-	free(req->buf);
+	blob_buf_free(req);
 	ngx_pfree(ctx->request->r->pool, req);
 
 	return allow;
@@ -416,10 +416,10 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
 out:
-	free(req->buf);
+	blob_buf_free(req);
 	ngx_pfree(request->r->pool, req);
 
-	free(du->buf->buf);
+	blob_buf_free(du->buf);
 	ngx_pfree(request->r->pool, du->buf);
 
 	return rc;
@@ -470,7 +470,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
-	free(du->buf->buf);
+	blob_buf_free(du->buf);
 	ngx_pfree(request->r->pool, du->buf);
 
 	return REQUEST_OK;
