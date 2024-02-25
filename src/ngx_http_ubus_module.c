@@ -566,8 +566,6 @@ out:
 		sem_post(ctx->request->avail_thread);
 		/* Signal obj has been processed */
 		sem_post(ctx->request->obj_processed);
-
-		pthread_exit(NULL);
 	}
 
 	return rc;
