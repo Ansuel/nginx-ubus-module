@@ -555,8 +555,6 @@ out:
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Json object processed correctly");
 
-	free_ubus_ctx_t(ctx, request->r);
-
 	if (array) {
 		if (rc != REQUEST_OK) {
 			*ctx->res_str = ubus_gen_error(ctx->request, rc);
@@ -567,6 +565,8 @@ out:
 		/* Signal obj has been processed */
 		sem_post(ctx->request->obj_processed);
 	}
+
+	free_ubus_ctx_t(ctx, request->r);
 
 	return rc;
 }
