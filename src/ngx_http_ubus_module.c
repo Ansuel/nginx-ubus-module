@@ -211,14 +211,13 @@ static ngx_int_t ngx_http_ubus_send_header(ngx_http_request_t *r,
 	return ngx_http_send_header(r);
 }
 
-static char *ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
-	struct dispatch_ubus *du;
+static char *gen_error_from_du(ngx_http_request_t *r, struct dispatch_ubus *du,
+			       enum rpc_status type) {
 	struct blob_buf *buf;
 	char *str;
 	void *c;
 
-	buf = ngx_pcalloc(request->r->pool, sizeof(*buf));
-	du = ngx_pcalloc(request->r->pool, sizeof(*du));
+	buf = ngx_pcalloc(r->pool, sizeof(*buf));
 
 	blob_buf_init(buf, 0);
 	ubus_init_response(buf, du);
@@ -231,14 +230,14 @@ static char *ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
 	str = blobmsg_format_json(buf->head, true);
 
 	blob_buf_free(buf);
-	ngx_pfree(request->r->pool, buf);
-	ngx_pfree(request->r->pool, du);
+	ngx_pfree(r->pool, buf);
 
 	return str;
 }
 
 static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
 	ngx_http_ubus_loc_conf_t *cglcf;
+	struct dispatch_ubus *du;
 	char *str;
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
@@ -248,9 +247,13 @@ static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
 	free_output_chain(request->r, request->out_chain_start);
 	request->res_len = 0;
 
-	str = ubus_gen_error(request, type);
+	du = ngx_pcalloc(request->r->pool, sizeof(*du));
+
+	str = gen_error_from_du(request, du, type);
 	append_to_output_chain(request, str);
 	free(str);
+
+	ngx_pfree(request->r->pool, du);
 
 	ngx_http_ubus_send_header(request->r, cglcf, NGX_HTTP_OK, request->res_len);
 	ngx_http_ubus_send_body(request);
@@ -567,7 +570,8 @@ out:
 		       "Json object processed correctly");
 
 	if (rc != REQUEST_OK)
-		*ctx->res_str = ubus_gen_error(ctx->request, rc);
+		*ctx->res_str = gen_error_from_du(ctx->request->r,
+						  ctx->ubus, rc);
 
 	if (array) {
 		/* Signal thread has finished */
@@ -638,8 +642,17 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Writing output of index %d to body", concurrent);
 		if (obj_num > 0)
 			append_to_output_chain(request, ",");
-		if (!res_strs[obj_num])
-			res_strs[obj_num] = ubus_gen_error(request, ERROR_INTERNAL);
+		if (!res_strs[obj_num]) {
+			struct json_object *obj_tmp;
+			struct dispatch_ubus *du;
+
+			obj_tmp = json_object_array_get_idx(obj, obj_num);
+			du = setup_dispatch_ubus(obj_tmp, request->r);
+
+			res_strs[obj_num] = gen_error_from_du(request->r, du, ERROR_INTERNAL);
+
+			free_dispatch_ubus(du, request->r);
+		}
 		append_to_output_chain(request, res_strs[obj_num]);
 		free(res_strs[obj_num]);
 	}
