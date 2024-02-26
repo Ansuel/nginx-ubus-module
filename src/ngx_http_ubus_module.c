@@ -726,13 +726,14 @@ static ngx_int_t ngx_http_ubus_elaborate_req(request_ctx_t *request,
 
 static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	off_t len;
-	char *buffer;
 	off_t pos = 0;
 	ngx_chain_t *in;
 	request_ctx_t *request;
+	struct json_tokener *jstok;
 	ngx_int_t rc = NGX_HTTP_OK;
-	struct dispatch_ubus *ubus;
+	enum json_tokener_error jserr;
 	ngx_http_ubus_loc_conf_t *cglcf;
+	struct json_object *jsobj = NULL;
 
 	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
 
@@ -749,32 +750,36 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 		goto finalize;
 	}
 
-	ubus = ngx_pcalloc(r->pool, sizeof(struct dispatch_ubus));
-	ubus->jsobj = NULL;
-	ubus->jstok = json_tokener_new();
-
-	if (ubus->jsobj || !ubus->jstok) {
+	jstok = json_tokener_new();
+	if (!jstok) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-			      "Error ubus struct not ok");
+			      "Error jstok struct not ok");
 		ubus_single_error(request, ERROR_PARSE);
-		goto free_tok;
+		goto free_ubus;
 	}
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
 		       "Reading request body");
 
-	buffer = ngx_pcalloc(r->pool, r->headers_in.content_length_n + 1);
-
 	for (in = r->request_body->bufs; in; in = in->next) {
 		len = ngx_buf_size(in->buf);
-		ngx_memcpy(buffer + pos, in->buf->pos, len);
+		jsobj = json_tokener_parse_ex(jstok, (const char *)in->buf->pos, len);
+		jserr = json_tokener_get_error(jstok);
+		if (jserr != json_tokener_continue &&
+		    jserr != json_tokener_success) {
+			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+				      "Error in json tokener parsing");
+			ubus_single_error(request, ERROR_PARSE);
+			goto free_tok;
+		}
+
 		pos += len;
 
 		if (pos > UBUS_MAX_POST_SIZE) {
 			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 				      "Error max post size for ubus socket");
 			ubus_single_error(request, ERROR_PARSE);
-			goto free_buf;
+			goto free_tok;
 		}
 	}
 
@@ -782,13 +787,10 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			      "Readed buffer differ from header request len");
 		ubus_single_error(request, ERROR_PARSE);
-		goto free_buf;
+		goto free_tok;
 	}
 
-	ubus->jsobj = json_tokener_parse_ex(ubus->jstok, buffer, pos);
-	ngx_pfree(r->pool, buffer);
-
-	rc = ngx_http_ubus_elaborate_req(request, ubus->jsobj);
+	rc = ngx_http_ubus_elaborate_req(request, jsobj);
 
 	if (rc == NGX_ERROR) {
 		// With ngx_error we are sending json error
@@ -810,13 +812,10 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "Request complete");
 
 free_obj:
-	json_object_put(ubus->jsobj);
-free_buf:
-	if (buffer)
-		ngx_pfree(r->pool, buffer);
+	json_object_put(jsobj);
 free_tok:
-	json_tokener_free(ubus->jstok);
-	ngx_pfree(r->pool, ubus);
+	json_tokener_free(jstok);
+free_ubus:
 	ubus_free(request->ubus_ctx);
 finalize:
 	ngx_pfree(r->pool, request);
