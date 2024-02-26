@@ -247,8 +247,6 @@ static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
 		      "Request generated error: %s", json_errors[type].msg);
 
 	request->res_len = 0;
-	if (request->ubus_ctx)
-		ubus_close_fds(request->ubus_ctx);
 
 	str = ubus_gen_error(request, type);
 	append_to_output_chain(request, str);
