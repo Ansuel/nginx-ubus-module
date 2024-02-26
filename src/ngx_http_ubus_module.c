@@ -189,11 +189,9 @@ static void ubus_add_cors_headers(ngx_http_request_t *r) {
 	}
 
 	set_custom_headers_out(r, "Access-Control-Allow-Origin", cors->ORIGIN);
-
 	if (cors->ACCESS_CONTROL_REQUEST_HEADERS)
 		set_custom_headers_out(r, "Access-Control-Allow-Headers",
 				       cors->ACCESS_CONTROL_REQUEST_HEADERS);
-
 	set_custom_headers_out(r, "Access-Control-Allow-Methods", "POST, OPTIONS");
 	set_custom_headers_out(r, "Access-Control-Allow-Credentials", "true");
 
@@ -360,8 +358,8 @@ static ngx_int_t ngx_http_ubus_send_body(request_ctx_t *request) {
 	ngx_int_t rc;
 
 	request->out_chain->buf->last_buf = 1;
-
 	rc = ngx_http_output_filter(request->r, request->out_chain_start);
+
 	free_output_chain(request->r, request->out_chain_start);
 
 	return rc;
@@ -743,7 +741,6 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	request->r = r;
 
 	request->ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
-
 	if (!request->ubus_ctx) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			      "Unable to connect to ubus socket: %s",
@@ -765,6 +762,7 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 
 	for (in = r->request_body->bufs; in; in = in->next) {
 		len = ngx_buf_size(in->buf);
+
 		jsobj = json_tokener_parse_ex(jstok, (const char *)in->buf->pos, len);
 		jserr = json_tokener_get_error(jstok);
 		if (jserr != json_tokener_continue &&
@@ -776,7 +774,6 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 		}
 
 		pos += len;
-
 		if (pos > UBUS_MAX_POST_SIZE) {
 			ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 				      "Error max post size for ubus socket");
@@ -793,7 +790,6 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	}
 
 	rc = ngx_http_ubus_elaborate_req(request, jsobj);
-
 	if (rc == NGX_ERROR) {
 		// With ngx_error we are sending json error
 		// and we say that the request is ok
@@ -833,10 +829,11 @@ static ngx_int_t ngx_http_ubus_handler(ngx_http_request_t *r) {
 	switch (r->method) {
 	case NGX_HTTP_OPTIONS:
 		r->header_only = 1;
+
 		ngx_http_ubus_send_header(r, cglcf, NGX_HTTP_OK, 0);
 		ngx_http_finalize_request(r, NGX_HTTP_OK);
-		return NGX_DONE;
 
+		return NGX_DONE;
 	case NGX_HTTP_POST:
 
 		rc = ngx_http_read_client_request_body(r, ngx_http_ubus_req_handler);
@@ -844,7 +841,6 @@ static ngx_int_t ngx_http_ubus_handler(ngx_http_request_t *r) {
 			return rc;
 
 		return NGX_DONE;
-
 	default:
 		return NGX_HTTP_BAD_REQUEST;
 	}
@@ -877,6 +873,7 @@ static void *ngx_http_ubus_create_loc_conf(ngx_conf_t *cf) {
 	conf->script_timeout = NGX_CONF_UNSET_UINT;
 	conf->parallel_req = NGX_CONF_UNSET_UINT;
 	conf->enable = NGX_CONF_UNSET;
+
 	return conf;
 }
 
