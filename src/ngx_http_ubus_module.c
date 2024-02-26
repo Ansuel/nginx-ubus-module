@@ -289,29 +289,41 @@ static ngx_int_t append_to_output_chain(request_ctx_t *request,
 	return NGX_OK;
 }
 
+static struct dispatch_ubus *setup_dispatch_ubus(struct json_object *obj,
+						 ngx_http_request_t *r) {
+	struct dispatch_ubus *du;
+
+	du = ngx_pcalloc(r->pool, sizeof(*du));
+	du->jsobj = NULL;
+	du->jsobj_cur = obj;
+	du->jstok = json_tokener_new();
+
+	return du;
+}
+
+static void free_dispatch_ubus(struct dispatch_ubus *du,
+			       ngx_http_request_t *r) {
+	json_object_put(du->jsobj);
+	json_tokener_free(du->jstok);
+	ngx_pfree(r->pool, du);
+}
+
 static ubus_ctx_t *setup_ubus_ctx_t(request_ctx_t *request,
 				   struct json_object *obj) {
 	ubus_ctx_t *ctx;
 
 	ctx = ngx_pcalloc(request->r->pool, sizeof(*ctx));
-	ctx->ubus = ngx_pcalloc(request->r->pool, sizeof(*ctx->ubus));
+	ctx->ubus = setup_dispatch_ubus(obj, request->r);
 	ctx->buf = ngx_pcalloc(request->r->pool, sizeof(*ctx->buf));
 	ctx->request = request;
-	ctx->obj = obj;
-	ctx->ubus->jsobj = NULL;
-	ctx->ubus->jstok = json_tokener_new();
 
 	return ctx;
 }
 
 static void free_ubus_ctx_t(ubus_ctx_t *ctx, ngx_http_request_t *r) {
-	if (ctx->ubus->jsobj)
-		json_object_put(ctx->ubus->jsobj);
-	if (ctx->ubus->jstok)
-		json_tokener_free(ctx->ubus->jstok);
+	free_dispatch_ubus(ctx->ubus, r);
 	if (ctx->buf->buf)
 		blob_buf_free(ctx->buf);
-	ngx_pfree(r->pool, ctx->ubus);
 	ngx_pfree(r->pool, ctx->buf);
 	ngx_pfree(r->pool, ctx);
 }
@@ -488,12 +500,11 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
-	if (json_object_get_type(ctx->obj) != json_type_object)
+	if (json_object_get_type(du->jsobj_cur) != json_type_object)
 		goto error;
 
-	du->jsobj_cur = ctx->obj;
 	blob_buf_init(ctx->buf, 0);
-	if (!blobmsg_add_object(ctx->buf, ctx->obj))
+	if (!blobmsg_add_object(ctx->buf, du->jsobj_cur))
 		goto error;
 
 	if (!parse_json_rpc(&data, ctx->buf->head))

@@ -60,7 +60,6 @@ typedef struct {
 typedef struct {
 	struct blob_buf *buf;
 	struct dispatch_ubus *ubus;
-	struct json_object *obj;
 	bool array;
 	char **res_str;
 	request_ctx_t *request;
