@@ -671,6 +671,7 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 
 	append_to_output_chain(request, *res_str);
 
+	free(*res_str);
 	ngx_pfree(request->r->pool, res_str);
 	return NGX_OK;
 }
