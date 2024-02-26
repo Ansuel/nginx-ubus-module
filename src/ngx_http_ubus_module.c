@@ -454,12 +454,13 @@ out:
 static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				      struct blob_attr *params) {
 
+	struct list_data data = {0};
+	struct dispatch_ubus *du;
+	struct blob_attr *cur;
 	void *r;
 	int rem;
-	struct list_data data = {0};
-	struct blob_attr *cur, *dup;
-	struct dispatch_ubus *du = ctx->ubus;
 
+	du = ctx->ubus;
 	du->buf = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
 	data.buf = du->buf;
 
@@ -470,24 +471,18 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	if (ctx->array)
 		sem_wait(request->sem);
 
+	r = blobmsg_open_array(data.buf, "result");
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
-		r = blobmsg_open_array(data.buf, "result");
 		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, &data);
-		blobmsg_close_array(data.buf, r);
 	} else {
-		r = blobmsg_open_table(data.buf, "result");
-		dup = blob_memdup(params);
-		if (dup) {
-			rem = blobmsg_data_len(dup);
-			data.verbose = true;
+		rem = blobmsg_data_len(params);
+		data.verbose = true;
 
-			__blob_for_each_attr(cur, blobmsg_data(dup), rem) ubus_lookup(
-				request->ubus_ctx, blobmsg_data(cur), ubus_list_cb, &data);
-
-			free(dup);
-		}
-		blobmsg_close_table(data.buf, r);
+		__blob_for_each_attr(cur, blobmsg_data(params), rem)
+			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
+				    ubus_list_cb, &data);
 	}
+	blobmsg_close_table(data.buf, r);
 
 	if (ctx->array)
 		sem_post(request->sem);
