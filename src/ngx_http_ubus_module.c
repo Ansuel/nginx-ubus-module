@@ -456,6 +456,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	struct list_data data = {0};
 	struct dispatch_ubus *du;
+	bool array = ctx->array;
 	struct blob_attr *cur;
 	void *r;
 	int rem;
@@ -468,7 +469,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	ubus_init_response(ctx->buf, du);
 
-	if (ctx->array)
+	if (array)
 		sem_wait(request->sem);
 
 	r = blobmsg_open_array(data.buf, "result");
@@ -484,7 +485,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	}
 	blobmsg_close_table(data.buf, r);
 
-	if (ctx->array)
+	if (array)
 		sem_post(request->sem);
 
 	blobmsg_add_blob(ctx->buf, blob_data(data.buf->head));
@@ -527,7 +528,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 
 		du->func = data.function;
 
-		if (ctx->array)
+		if (array)
 			sem_wait(ctx->request->sem);
 
 		if (ubus_lookup_id(ctx->request->ubus_ctx, data.object, &du->obj)) {
@@ -535,10 +536,10 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 			goto error;
 		}
 
-		if (ctx->array)
+		if (array)
 			sem_post(ctx->request->sem);
 
-		if (ctx->array)
+		if (array)
 			sem_wait(ctx->request->sem);
 
 		if (!cglcf->noauth && !ubus_allowed(ctx, cglcf->script_timeout, data.sid,
@@ -547,7 +548,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 			goto error;
 		}
 
-		if (ctx->array)
+		if (array)
 			sem_post(ctx->request->sem);
 
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
@@ -567,7 +568,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 	}
 
 error:
-	if (ctx->array)
+	if (array)
 		sem_post(ctx->request->sem);
 	rc = err;
 out:
