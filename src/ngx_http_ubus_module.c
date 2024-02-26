@@ -555,11 +555,10 @@ out:
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Json object processed correctly");
 
-	if (array) {
-		if (rc != REQUEST_OK) {
-			*ctx->res_str = ubus_gen_error(ctx->request, rc);
-		}
+	if (rc != REQUEST_OK)
+		*ctx->res_str = ubus_gen_error(ctx->request, rc);
 
+	if (array) {
 		/* Signal thread has finished */
 		sem_post(ctx->request->avail_thread);
 		/* Signal obj has been processed */
@@ -664,16 +663,11 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 
 	rc = ubus_post_object(ctx);
 
-	if (rc != REQUEST_OK) {
-		ubus_single_error(request, rc);
-		return NGX_ERROR;
-	}
-
 	append_to_output_chain(request, *res_str);
 
 	free(*res_str);
 	ngx_pfree(request->r->pool, res_str);
-	return NGX_OK;
+	return rc == REQUEST_OK ? NGX_OK : NGX_ERROR;
 }
 
 static ngx_int_t ngx_http_ubus_elaborate_req(request_ctx_t *request,
