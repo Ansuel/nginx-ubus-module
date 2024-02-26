@@ -499,11 +499,11 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 }
 
 static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
+	int ret;
 	bool array = ctx->array;
 	struct rpc_data data = {};
 	ngx_http_ubus_loc_conf_t *cglcf;
 	enum rpc_status rc = REQUEST_OK;
-	enum rpc_status err = ERROR_PARSE;
 	struct dispatch_ubus *du = ctx->ubus;
 	request_ctx_t *request = ctx->request;
 
@@ -512,44 +512,56 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
-	if (json_object_get_type(du->jsobj_cur) != json_type_object)
-		goto error;
+	if (json_object_get_type(du->jsobj_cur) != json_type_object) {
+		rc = ERROR_PARSE;
+		goto out;
+	}
 
 	blob_buf_init(ctx->buf, 0);
-	if (!blobmsg_add_object(ctx->buf, du->jsobj_cur))
-		goto error;
+	if (!blobmsg_add_object(ctx->buf, du->jsobj_cur)) {
+		rc = ERROR_PARSE;
+		goto out;
+	}
 
-	if (!parse_json_rpc(&data, ctx->buf->head))
-		goto error;
+	if (!parse_json_rpc(&data, ctx->buf->head)) {
+		rc = ERROR_PARSE;
+		goto out;
+	}
 
 	if (!strcmp(data.method, "call")) {
-		if (!data.sid || !data.object || !data.function || !data.data)
-			goto error;
+		if (!data.sid || !data.object || !data.function || !data.data) {
+			rc = ERROR_PARSE;
+			goto out;
+		}
 
 		du->func = data.function;
 
 		if (array)
 			sem_wait(ctx->request->sem);
 
-		if (ubus_lookup_id(ctx->request->ubus_ctx, data.object, &du->obj)) {
-			err = ERROR_OBJECT;
-			goto error;
-		}
+		ret = ubus_lookup_id(ctx->request->ubus_ctx, data.object, &du->obj);
 
 		if (array)
 			sem_post(ctx->request->sem);
+
+		if (ret) {
+			rc = ERROR_OBJECT;
+			goto out;
+		}
 
 		if (array)
 			sem_wait(ctx->request->sem);
 
-		if (!cglcf->noauth && !ubus_allowed(ctx, cglcf->script_timeout, data.sid,
-						    data.object, data.function)) {
-			err = ERROR_ACCESS;
-			goto error;
-		}
+		ret = ubus_allowed(ctx, cglcf->script_timeout, data.sid,
+				   data.object, data.function);
 
 		if (array)
 			sem_post(ctx->request->sem);
+
+		if (!cglcf->noauth && !ret) {
+			rc = ERROR_ACCESS;
+			goto out;
+		}
 
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Start processing call request");
@@ -563,14 +575,9 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		rc = ubus_send_list(request, ctx, data.params);
 		goto out;
 	} else {
-		err = ERROR_METHOD;
-		goto error;
+		rc = ERROR_METHOD;
 	}
 
-error:
-	if (array)
-		sem_post(ctx->request->sem);
-	rc = err;
 out:
 	if (data.params)
 		free(data.params);
