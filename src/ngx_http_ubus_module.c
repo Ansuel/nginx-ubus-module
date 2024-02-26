@@ -230,7 +230,6 @@ static char *ubus_gen_error(request_ctx_t *request, enum rpc_status type) {
 
 	str = blobmsg_format_json(buf->head, true);
 
-	free_output_chain(request->r, request->out_chain_start);
 	blob_buf_free(buf);
 	ngx_pfree(request->r->pool, buf);
 	ngx_pfree(request->r->pool, du);
@@ -246,6 +245,7 @@ static void ubus_single_error(request_ctx_t *request, enum rpc_status type) {
 	ngx_log_error(NGX_LOG_ERR, request->r->connection->log, 0,
 		      "Request generated error: %s", json_errors[type].msg);
 
+	free_output_chain(request->r, request->out_chain_start);
 	request->res_len = 0;
 
 	str = ubus_gen_error(request, type);
