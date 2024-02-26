@@ -499,13 +499,13 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 }
 
 static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
-	int ret;
-	bool array = ctx->array;
-	struct rpc_data data = {};
-	ngx_http_ubus_loc_conf_t *cglcf;
-	enum rpc_status rc = REQUEST_OK;
-	struct dispatch_ubus *du = ctx->ubus;
 	request_ctx_t *request = ctx->request;
+	struct dispatch_ubus *du = ctx->ubus;
+	ngx_http_ubus_loc_conf_t *cglcf;
+	struct rpc_data data = {};
+	bool array = ctx->array;
+	enum rpc_status rc;
+	int ret;
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Start processing json object");
@@ -537,12 +537,12 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		du->func = data.function;
 
 		if (array)
-			sem_wait(ctx->request->sem);
+			sem_wait(request->sem);
 
-		ret = ubus_lookup_id(ctx->request->ubus_ctx, data.object, &du->obj);
+		ret = ubus_lookup_id(request->ubus_ctx, data.object, &du->obj);
 
 		if (array)
-			sem_post(ctx->request->sem);
+			sem_post(request->sem);
 
 		if (ret) {
 			rc = ERROR_OBJECT;
@@ -550,13 +550,13 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		}
 
 		if (array)
-			sem_wait(ctx->request->sem);
+			sem_wait(request->sem);
 
 		ret = ubus_allowed(ctx, cglcf->script_timeout, data.sid,
 				   data.object, data.function);
 
 		if (array)
-			sem_post(ctx->request->sem);
+			sem_post(request->sem);
 
 		if (!cglcf->noauth && !ret) {
 			rc = ERROR_ACCESS;
@@ -573,27 +573,26 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 			       "Start processing list request");
 
 		rc = ubus_send_list(request, ctx, data.params);
+		if (data.params)
+			free(data.params);
+
 		goto out;
 	} else {
 		rc = ERROR_METHOD;
 	}
 
 out:
-	if (data.params)
-		free(data.params);
-
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Json object processed correctly");
 
 	if (rc != REQUEST_OK)
-		*ctx->res_str = gen_error_from_du(ctx->request->r,
-						  ctx->ubus, rc);
+		*ctx->res_str = gen_error_from_du(request->r, ctx->ubus, rc);
 
 	if (array) {
 		/* Signal thread has finished */
-		sem_post(ctx->request->avail_thread);
+		sem_post(request->avail_thread);
 		/* Signal obj has been processed */
-		sem_post(ctx->request->obj_processed);
+		sem_post(request->obj_processed);
 	}
 
 	free_ubus_ctx_t(ctx, request->r);
