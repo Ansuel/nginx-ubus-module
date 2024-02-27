@@ -619,6 +619,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 				    struct json_object *obj) {
 	char **res_strs;
 	ubus_ctx_t *ctx;
+	pthread_attr_t attr;
 	int len, obj_num = 0;
 	ngx_int_t rc = NGX_OK;
 	struct json_object *obj_tmp;
@@ -639,6 +640,10 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 	len = json_object_array_length(obj);
 	res_strs = ngx_pcalloc(request->r->pool, len * sizeof(*res_strs));
 
+	/* Set pthread DETACHED as we don't use join measure to track them */
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
 	for (obj_num = 0; obj_num < len; obj_num++) {
 		pthread_t thread = { 0 };
 
@@ -656,7 +661,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 		ctx->array = true;
 		ctx->res_str = res_strs + obj_num;
 
-		pthread_create(&thread, NULL, (void *)ubus_post_object, ctx);
+		pthread_create(&thread, &attr, (void *)ubus_post_object, ctx);
 	}
 
 	/* Loop len time to make sure every thread completed and
