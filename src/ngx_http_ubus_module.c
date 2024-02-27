@@ -315,7 +315,6 @@ static struct dispatch_ubus *setup_dispatch_ubus(struct json_object *obj,
 
 static void free_dispatch_ubus(struct dispatch_ubus *du,
 			       ngx_http_request_t *r) {
-	json_object_put(du->jsobj);
 	ngx_pfree(r->pool, du);
 }
 
