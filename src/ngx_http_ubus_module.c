@@ -453,7 +453,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	bool array = ctx->array;
 	struct list_data *data;
 	struct blob_attr *cur;
-	void *r;
+	void *r, *t;
 	int rem;
 
 	du = ctx->ubus;
@@ -464,9 +464,10 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	blob_buf_init(res_obj, 0);
 	ubus_init_response(res_obj, du);
 
-
 	r = blobmsg_open_array(res_obj, "result");
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
+		t = blobmsg_open_array(res_obj, "");
+
 		if (array)
 			sem_wait(request->sem);
 
@@ -474,6 +475,8 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 		if (array)
 			sem_post(request->sem);
+
+		blobmsg_close_array(res_obj, t);
 	} else {
 		rem = blobmsg_data_len(params);
 		data->verbose = true;
@@ -489,7 +492,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				sem_post(request->sem);
 		}
 	}
-	blobmsg_close_table(res_obj, r);
+	blobmsg_close_array(res_obj, r);
 
 	*ctx->res_str = blobmsg_format_json(res_obj->head, true);
 
