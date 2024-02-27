@@ -308,8 +308,7 @@ static struct dispatch_ubus *setup_dispatch_ubus(struct json_object *obj,
 	struct dispatch_ubus *du;
 
 	du = ngx_pcalloc(r->pool, sizeof(*du));
-	du->jsobj = NULL;
-	du->jsobj_cur = obj;
+	du->jsobj = obj;
 
 	return du;
 }
@@ -510,13 +509,13 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
-	if (json_object_get_type(du->jsobj_cur) != json_type_object) {
+	if (json_object_get_type(du->jsobj) != json_type_object) {
 		rc = ERROR_PARSE;
 		goto out;
 	}
 
 	blob_buf_init(ctx->buf, 0);
-	if (!blobmsg_add_object(ctx->buf, du->jsobj_cur)) {
+	if (!blobmsg_add_object(ctx->buf, du->jsobj)) {
 		rc = ERROR_PARSE;
 		goto out;
 	}

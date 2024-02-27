@@ -61,7 +61,7 @@ bool parse_json_rpc(struct rpc_data *d, struct blob_attr *data) {
 }
 
 void ubus_init_response(struct blob_buf *buf, struct dispatch_ubus *du) {
-	struct json_object *obj = du->jsobj_cur, *obj2 = NULL;
+	struct json_object *obj = du->jsobj, *obj2 = NULL;
 
 	blob_buf_init(buf, 0);
 	blobmsg_add_string(buf, "jsonrpc", "2.0");
