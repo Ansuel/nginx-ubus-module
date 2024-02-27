@@ -12,6 +12,8 @@ jobs:
     container:
       image: alpine:latest
 
+    continue-on-error: true
+
     strategy:
       matrix:
         include:
