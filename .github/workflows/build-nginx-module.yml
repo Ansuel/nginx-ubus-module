@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-backports:
-    name: Build NGINX Module
+    name: Build NGINX Module (${{ matrix.compiler }})
     runs-on: ubuntu-latest
 
     container:
@@ -14,7 +14,11 @@ jobs:
 
     strategy:
       matrix:
-        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            dependency: gcc
+          - compiler: clang
+            dependency: clang clang-analyzer
 
     steps:
       - name: Install Dependencies
@@ -23,7 +27,7 @@ jobs:
 
       - name: Install Compiler
         run: |
-          apk add ${{ matrix.compiler }}
+          apk add ${{ matrix.dependency }}
 
       - name: Install libubox
         run: |
@@ -72,3 +76,14 @@ jobs:
           cd nginx-${{ env.NGINX_VERSION }}
           ./configure --add-dynamic-module=../nginx-ubus-mod
           make modules
+
+      - name: Run Static-Analyze
+        if: matrix.compiler == 'clang'
+        env:
+          NGINX_VERSION: ${{ steps.determine_nginx_version.outputs.nginx_version }}
+        run: |
+          cd nginx-${{ env.NGINX_VERSION }}
+
+          make clean
+          ./configure --add-dynamic-module=../nginx-ubus-mod
+          scan-build make modules
