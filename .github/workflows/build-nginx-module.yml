@@ -12,10 +12,18 @@ jobs:
     container:
       image: alpine:latest
 
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+
     steps:
       - name: Install Dependencies
         run: |
-          apk update && apk add git cmake make gcc musl-dev pkgconfig json-c-dev curl pcre-dev zlib-dev
+          apk update && apk add git cmake make musl-dev pkgconfig json-c-dev curl pcre-dev zlib-dev
+
+      - name: Install Compiler
+        run: |
+          apk add ${{ matrix.compiler }}
 
       - name: Install libubox
         run: |
