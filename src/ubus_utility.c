@@ -91,10 +91,9 @@ void ubus_allowed_cb(struct ubus_request *req, int type,
 
 void ubus_request_cb(struct ubus_request *req, int type,
 		     struct blob_attr *msg) {
-	ubus_ctx_t *ctx = (ubus_ctx_t *)req->priv;
-	struct dispatch_ubus *du = ctx->ubus;
+	struct blob_buf *buf = (struct blob_buf *)req->priv;
 
-	blobmsg_add_field(du->buf, BLOBMSG_TYPE_TABLE, "", blob_data(msg),
+	blobmsg_add_field(buf, BLOBMSG_TYPE_TABLE, "", blob_data(msg),
 			  blob_len(msg));
 }
 

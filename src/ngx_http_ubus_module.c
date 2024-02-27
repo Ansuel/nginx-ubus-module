@@ -396,13 +396,14 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	void *r;
 	int ret, rem;
 	struct blob_attr *cur;
+	struct blob_buf *req, *res_obj;
 	enum rpc_status rc = REQUEST_OK;
 	ngx_http_ubus_loc_conf_t *cglcf;
 	struct dispatch_ubus *du = ctx->ubus;
-	struct blob_buf *req = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
-	du->buf = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
+	req = ngx_pcalloc(request->r->pool, sizeof(*req));
+	res_obj = ngx_pcalloc(request->r->pool, sizeof(*res_obj));
 
 	blob_buf_init(req, 0);
 
@@ -418,13 +419,13 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
 	blobmsg_add_string(req, "ubus_rpc_session", sid);
 
-	blob_buf_init(du->buf, 0);
+	blob_buf_init(res_obj, 0);
 
 	if (ctx->array)
 		sem_wait(request->sem);
 
 	ret = ubus_invoke(request->ubus_ctx, du->obj, du->func, req->head,
-			  ubus_request_cb, ctx, cglcf->script_timeout * 1000);
+			  ubus_request_cb, res_obj, cglcf->script_timeout * 1000);
 
 	if (ctx->array)
 		sem_post(request->sem);
@@ -433,7 +434,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	blobmsg_add_u32(ctx->buf, "", ret);
 
 	if (!ret)
-		blob_for_each_attr(cur, du->buf->head, rem) blobmsg_add_blob(ctx->buf, cur);
+		blob_for_each_attr(cur, res_obj->head, rem) blobmsg_add_blob(ctx->buf, cur);
 
 	blobmsg_close_array(ctx->buf, r);
 
@@ -443,8 +444,8 @@ out:
 	blob_buf_free(req);
 	ngx_pfree(request->r->pool, req);
 
-	blob_buf_free(du->buf);
-	ngx_pfree(request->r->pool, du->buf);
+	blob_buf_free(res_obj);
+	ngx_pfree(request->r->pool, res_obj);
 
 	return rc;
 }
@@ -453,6 +454,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				      struct blob_attr *params) {
 
 	struct list_data data = {0};
+	struct blob_buf *res_obj;
 	struct dispatch_ubus *du;
 	bool array = ctx->array;
 	struct blob_attr *cur;
@@ -460,17 +462,17 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	int rem;
 
 	du = ctx->ubus;
-	du->buf = ngx_pcalloc(request->r->pool, sizeof(struct blob_buf));
-	data.buf = du->buf;
+	res_obj = ngx_pcalloc(request->r->pool, sizeof(*res_obj));
+	data.buf = res_obj;
 
-	blob_buf_init(data.buf, 0);
+	blob_buf_init(res_obj, 0);
 
 	ubus_init_response(ctx->buf, du);
 
 	if (array)
 		sem_wait(request->sem);
 
-	r = blobmsg_open_array(data.buf, "result");
+	r = blobmsg_open_array(res_obj, "result");
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
 		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, &data);
 	} else {
@@ -481,17 +483,17 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
 				    ubus_list_cb, &data);
 	}
-	blobmsg_close_table(data.buf, r);
+	blobmsg_close_table(res_obj, r);
 
 	if (array)
 		sem_post(request->sem);
 
-	blobmsg_add_blob(ctx->buf, blob_data(data.buf->head));
+	blobmsg_add_blob(ctx->buf, blob_data(res_obj->head));
 
 	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
-	blob_buf_free(du->buf);
-	ngx_pfree(request->r->pool, du->buf);
+	blob_buf_free(res_obj);
+	ngx_pfree(request->r->pool, res_obj);
 
 	return REQUEST_OK;
 }

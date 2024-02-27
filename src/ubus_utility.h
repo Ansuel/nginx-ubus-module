@@ -36,8 +36,6 @@ struct dispatch_ubus {
 
 	uint32_t obj;
 	const char *func;
-
-	struct blob_buf *buf;
 };
 
 typedef struct {
