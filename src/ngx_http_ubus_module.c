@@ -310,7 +310,6 @@ static struct dispatch_ubus *setup_dispatch_ubus(struct json_object *obj,
 	du = ngx_pcalloc(r->pool, sizeof(*du));
 	du->jsobj = NULL;
 	du->jsobj_cur = obj;
-	du->jstok = json_tokener_new();
 
 	return du;
 }
@@ -318,7 +317,6 @@ static struct dispatch_ubus *setup_dispatch_ubus(struct json_object *obj,
 static void free_dispatch_ubus(struct dispatch_ubus *du,
 			       ngx_http_request_t *r) {
 	json_object_put(du->jsobj);
-	json_tokener_free(du->jstok);
 	ngx_pfree(r->pool, du);
 }
 

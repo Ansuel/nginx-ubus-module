@@ -30,7 +30,6 @@
 struct dispatch_ubus {
 	struct ubus_request req;
 
-	struct json_tokener *jstok;
 	struct json_object *jsobj;
 	struct json_object *jsobj_cur;
 
