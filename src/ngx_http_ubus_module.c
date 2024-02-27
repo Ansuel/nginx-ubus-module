@@ -782,6 +782,13 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 		}
 	}
 
+	if (!jsobj) {
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+			      "Error in json tokener parsing");
+		ubus_single_error(request, ERROR_PARSE);
+		goto free_tok;
+	}
+
 	if (pos != r->headers_in.content_length_n) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			      "Readed buffer differ from header request len");
