@@ -28,8 +28,6 @@
 #define UBUS_DEFAULT_SID "00000000000000000000000000000000"
 
 struct dispatch_ubus {
-	struct ubus_request req;
-
 	struct json_object *jsobj;
 
 	uint32_t obj;
