@@ -732,22 +732,23 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	struct json_tokener *jstok;
 	ngx_int_t rc = NGX_HTTP_OK;
 	enum json_tokener_error jserr;
+	struct ubus_context *ubus_ctx;
 	ngx_http_ubus_loc_conf_t *cglcf;
 	struct json_object *jsobj = NULL;
-
-	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
 
 	request = ngx_pcalloc(r->pool, sizeof(request_ctx_t));
 	request->r = r;
 
-	request->ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
-	if (!request->ubus_ctx) {
+	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
+	ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
+	if (!ubus_ctx) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			      "Unable to connect to ubus socket: %s",
 			      cglcf->socket_path.data);
 		ubus_single_error(request, ERROR_INTERNAL);
 		goto finalize;
 	}
+	request->ubus_ctx = ubus_ctx;
 
 	jstok = json_tokener_new();
 	if (!jstok) {
@@ -821,7 +822,7 @@ free_obj:
 free_tok:
 	json_tokener_free(jstok);
 free_ubus:
-	ubus_free(request->ubus_ctx);
+	ubus_free(ubus_ctx);
 finalize:
 	ngx_pfree(r->pool, request);
 	ngx_http_finalize_request(r, rc);
