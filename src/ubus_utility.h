@@ -52,7 +52,6 @@ typedef struct {
 } request_ctx_t;
 
 typedef struct {
-	struct blob_buf *buf;
 	struct dispatch_ubus *ubus;
 	bool array;
 	char **res_str;
