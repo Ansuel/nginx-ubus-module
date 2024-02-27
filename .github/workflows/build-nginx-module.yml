@@ -78,7 +78,6 @@ jobs:
           make modules
 
       - name: Run Static-Analyze
-        if: matrix.compiler == 'clang'
         env:
           NGINX_VERSION: ${{ steps.determine_nginx_version.outputs.nginx_version }}
         run: |
@@ -86,4 +85,8 @@ jobs:
 
           make clean
           ./configure --add-dynamic-module=../nginx-ubus-mod
-          scan-build make modules
+          if [ "${{ matrix.compiler }}" == "clang" ]; then
+            scan-build make modules
+          else
+            make modules CFLAGS=-fanalyzer
+          fi
