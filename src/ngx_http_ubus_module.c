@@ -581,11 +581,14 @@ free_data:
 	ngx_pfree(request->r->pool, data);
 
 out:
-	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
-		       "Json object processed correctly");
-
-	if (rc != REQUEST_OK)
+	if (rc != REQUEST_OK) {
 		*ctx->res_str = gen_error_from_du(request->r, ctx->ubus, rc);
+		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
+			       "Error in Json object processed: %d", rc);
+	} else {
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
+			       "Json object processed correctly");
+	}
 
 	if (array) {
 		/* Signal thread has finished */
