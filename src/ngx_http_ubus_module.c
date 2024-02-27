@@ -500,8 +500,8 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 	request_ctx_t *request = ctx->request;
 	struct dispatch_ubus *du = ctx->ubus;
 	ngx_http_ubus_loc_conf_t *cglcf;
-	struct rpc_data data = {};
 	bool array = ctx->array;
+	struct rpc_data *data;
 	enum rpc_status rc;
 	int ret;
 
@@ -521,63 +521,64 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		goto out;
 	}
 
-	if (!parse_json_rpc(&data, ctx->buf->head)) {
+	data = ngx_pcalloc(request->r->pool, sizeof(*data));
+	if (!parse_json_rpc(data, ctx->buf->head)) {
 		rc = ERROR_PARSE;
-		goto out;
+		goto free_data;
 	}
 
-	if (!strcmp(data.method, "call")) {
-		if (!data.sid || !data.object || !data.function || !data.data) {
+	if (!strcmp(data->method, "call")) {
+		if (!data->sid || !data->object || !data->function || !data->data) {
 			rc = ERROR_PARSE;
-			goto out;
+			goto free_data;
 		}
 
-		du->func = data.function;
+		du->func = data->function;
 
 		if (array)
 			sem_wait(request->sem);
 
-		ret = ubus_lookup_id(request->ubus_ctx, data.object, &du->obj_id);
+		ret = ubus_lookup_id(request->ubus_ctx, data->object, &du->obj_id);
 
 		if (array)
 			sem_post(request->sem);
 
 		if (ret) {
 			rc = ERROR_OBJECT;
-			goto out;
+			goto free_data;
 		}
 
 		if (array)
 			sem_wait(request->sem);
 
-		ret = ubus_allowed(ctx, cglcf->script_timeout, data.sid,
-				   data.object, data.function);
+		ret = ubus_allowed(ctx, cglcf->script_timeout, data->sid,
+				   data->object, data->function);
 
 		if (array)
 			sem_post(request->sem);
 
 		if (!cglcf->noauth && !ret) {
 			rc = ERROR_ACCESS;
-			goto out;
+			goto free_data;
 		}
 
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Start processing call request");
 
-		rc = ubus_send_request(request, ctx, data.sid, data.data);
-		goto out;
-	} else if (!strcmp(data.method, "list")) {
+		rc = ubus_send_request(request, ctx, data->sid, data->data);
+	} else if (!strcmp(data->method, "list")) {
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Start processing list request");
 
-		rc = ubus_send_list(request, ctx, data.params);
-		if (data.params)
-			free(data.params);
-
-		goto out;
+		rc = ubus_send_list(request, ctx, data->params);
+		if (data->params)
+			free(data->params);
 	} else {
 		rc = ERROR_METHOD;
 	}
+
+free_data:
+	ngx_pfree(request->r->pool, data);
 
 out:
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
