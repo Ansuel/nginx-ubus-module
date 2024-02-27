@@ -449,17 +449,18 @@ out:
 static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				      struct blob_attr *params) {
 
-	struct list_data data = {0};
 	struct blob_buf *res_obj;
 	struct dispatch_ubus *du;
 	bool array = ctx->array;
+	struct list_data *data;
 	struct blob_attr *cur;
 	void *r;
 	int rem;
 
 	du = ctx->ubus;
 	res_obj = ngx_pcalloc(request->r->pool, sizeof(*res_obj));
-	data.buf = res_obj;
+	data = ngx_pcalloc(request->r->pool, sizeof(*data));
+	data->buf = res_obj;
 
 	blob_buf_init(res_obj, 0);
 
@@ -470,14 +471,14 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	r = blobmsg_open_array(res_obj, "result");
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
-		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, &data);
+		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, data);
 	} else {
 		rem = blobmsg_data_len(params);
-		data.verbose = true;
+		data->verbose = true;
 
 		__blob_for_each_attr(cur, blobmsg_data(params), rem)
 			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
-				    ubus_list_cb, &data);
+				    ubus_list_cb, data);
 	}
 	blobmsg_close_table(res_obj, r);
 
@@ -488,6 +489,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 
 	*ctx->res_str = blobmsg_format_json(ctx->buf->head, true);
 
+	ngx_pfree(request->r->pool, data);
 	blob_buf_free(res_obj);
 	ngx_pfree(request->r->pool, res_obj);
 
