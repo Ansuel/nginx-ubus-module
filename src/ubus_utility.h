@@ -30,7 +30,7 @@
 struct dispatch_ubus {
 	struct json_object *jsobj;
 
-	uint32_t obj;
+	uint32_t obj_id;
 	const char *func;
 };
 

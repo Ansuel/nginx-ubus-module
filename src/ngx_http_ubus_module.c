@@ -420,7 +420,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	if (ctx->array)
 		sem_wait(request->sem);
 
-	ret = ubus_invoke(request->ubus_ctx, du->obj, du->func, req->head,
+	ret = ubus_invoke(request->ubus_ctx, du->obj_id, du->func, req->head,
 			  ubus_request_cb, res_obj, cglcf->script_timeout * 1000);
 
 	if (ctx->array)
@@ -537,7 +537,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		if (array)
 			sem_wait(request->sem);
 
-		ret = ubus_lookup_id(request->ubus_ctx, data.object, &du->obj);
+		ret = ubus_lookup_id(request->ubus_ctx, data.object, &du->obj_id);
 
 		if (array)
 			sem_post(request->sem);
