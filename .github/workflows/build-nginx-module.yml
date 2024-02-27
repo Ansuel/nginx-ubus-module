@@ -12,9 +12,8 @@ jobs:
     container:
       image: alpine:latest
 
-    continue-on-error: true
-
     strategy:
+      fail-fast: false
       matrix:
         include:
           - compiler: gcc
