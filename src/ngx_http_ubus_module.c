@@ -502,6 +502,7 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 	ngx_http_ubus_loc_conf_t *cglcf;
 	bool array = ctx->array;
 	struct rpc_data *data;
+	struct blob_buf *buf;
 	enum rpc_status rc;
 	int ret;
 
@@ -515,14 +516,15 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 		goto out;
 	}
 
-	blob_buf_init(ctx->buf, 0);
-	if (!blobmsg_add_object(ctx->buf, du->jsobj)) {
+	buf = ngx_pcalloc(request->r->pool, sizeof(*buf));
+	blob_buf_init(buf, 0);
+	if (!blobmsg_add_object(buf, du->jsobj)) {
 		rc = ERROR_PARSE;
-		goto out;
+		goto free_buf;
 	}
 
 	data = ngx_pcalloc(request->r->pool, sizeof(*data));
-	if (!parse_json_rpc(data, ctx->buf->head)) {
+	if (!parse_json_rpc(data, buf->head)) {
 		rc = ERROR_PARSE;
 		goto free_data;
 	}
@@ -579,6 +581,10 @@ static enum rpc_status ubus_post_object(ubus_ctx_t *ctx) {
 
 free_data:
 	ngx_pfree(request->r->pool, data);
+
+free_buf:
+	blob_buf_free(buf);
+	ngx_pfree(request->r->pool, buf);
 
 out:
 	if (rc != REQUEST_OK) {
