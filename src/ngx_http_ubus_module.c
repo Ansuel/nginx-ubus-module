@@ -318,12 +318,14 @@ static void free_dispatch_ubus(struct dispatch_ubus *du,
 }
 
 static ubus_ctx_t *setup_ubus_ctx_t(request_ctx_t *request,
-				   struct json_object *obj) {
+				    struct json_object *obj,
+				    char **res_str) {
 	ubus_ctx_t *ctx;
 
 	ctx = ngx_pcalloc(request->r->pool, sizeof(*ctx));
 	ctx->ubus = setup_dispatch_ubus(obj, request->r);
 	ctx->request = request;
+	ctx->res_str = res_str;
 
 	return ctx;
 }
@@ -650,9 +652,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Spawning thread %d to process request %d", concurrent,
 			       obj_num);
 
-		ctx = setup_ubus_ctx_t(request, obj_tmp);
-
-		ctx->res_str = request->res_strs + obj_num;
+		ctx = setup_ubus_ctx_t(request, obj_tmp, request->res_strs + obj_num);
 
 		pthread_create(&thread, &attr, (void *)ubus_post_object, ctx);
 	}
@@ -681,8 +681,7 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 	ubus_ctx_t *ctx;
 	enum rpc_status rc;
 
-	ctx = setup_ubus_ctx_t(request, obj);
-	ctx->res_str = request->res_strs;
+	ctx = setup_ubus_ctx_t(request, obj, request->res_strs);
 
 	rc = ubus_post_object(ctx);
 
