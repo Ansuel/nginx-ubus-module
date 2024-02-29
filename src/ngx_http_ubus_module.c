@@ -221,7 +221,6 @@ static char *gen_error_from_du(ngx_http_request_t *r, struct dispatch_ubus *du,
 
 	buf = ngx_pcalloc(r->pool, sizeof(*buf));
 
-	blob_buf_init(buf, 0);
 	ubus_init_response(buf, du);
 
 	c = blobmsg_open_table(buf, "error");
@@ -412,7 +411,6 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	blob_buf_init(data, 0);
 
 	res_obj = ngx_pcalloc(request->r->pool, sizeof(*res_obj));
-	blob_buf_init(res_obj, 0);
 	ubus_init_response(res_obj, du);
 
 	r = blobmsg_open_array(res_obj, "result");
@@ -462,7 +460,6 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	data = ngx_pcalloc(request->r->pool, sizeof(*data));
 	data->buf = res_obj;
 
-	blob_buf_init(res_obj, 0);
 	ubus_init_response(res_obj, du);
 
 	r = blobmsg_open_array(res_obj, "result");
