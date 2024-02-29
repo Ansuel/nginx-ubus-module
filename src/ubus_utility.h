@@ -49,11 +49,13 @@ typedef struct {
 	 * been processed. (instead of relying to pthread join)
 	 */
 	sem_t *obj_processed;
+	int objs_num;
+	char **res_strs;
+	bool array;
 } request_ctx_t;
 
 typedef struct {
 	struct dispatch_ubus *ubus;
-	bool array;
 	char **res_str;
 	request_ctx_t *request;
 } ubus_ctx_t;
