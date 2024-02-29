@@ -100,7 +100,7 @@ jobs:
         tar -xf nginx-${{ env.NGINX_VERSION }}.tar.gz
 
         cd nginx-${{ env.NGINX_VERSION }}
-        ./configure --add-dynamic-module=../
+        ./configure --with-threads --add-dynamic-module=../
         make modules
 
     - name: Perform CodeQL Analysis

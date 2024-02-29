@@ -75,7 +75,7 @@ jobs:
           tar -xf nginx-${{ env.NGINX_VERSION }}.tar.gz
 
           cd nginx-${{ env.NGINX_VERSION }}
-          ./configure --add-dynamic-module=../nginx-ubus-mod
+          ./configure --with-threads --add-dynamic-module=../nginx-ubus-mod
           make modules
 
       - name: Run Static-Analyze
@@ -85,7 +85,7 @@ jobs:
           cd nginx-${{ env.NGINX_VERSION }}
 
           make clean
-          ./configure --add-dynamic-module=../nginx-ubus-mod
+          ./configure --with-threads --add-dynamic-module=../nginx-ubus-mod
           if [ "${{ matrix.compiler }}" == "clang" ]; then
             scan-build make modules
           else
