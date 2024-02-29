@@ -606,20 +606,34 @@ out:
 	if (array) {
 		/* Signal thread has finished */
 		sem_post(request->avail_thread);
-		/* Signal obj has been processed */
-		sem_post(request->obj_processed);
 	}
+
+	/* Signal obj has been processed */
+	sem_post(request->obj_processed);
 
 	free_ubus_ctx_t(ctx, request->r);
 
 	return rc;
 }
 
+static void ubus_process_object(request_ctx_t *request, struct json_object *obj,
+				char **res_str) {
+	pthread_t thread = { 0 };
+	pthread_attr_t attr;
+	ubus_ctx_t *ctx;
+
+	/* Set pthread DETACHED as we don't use join measure to track them */
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	ctx = setup_ubus_ctx_t(request, obj, res_str);
+
+	pthread_create(&thread, &attr, (void *)ubus_post_object, ctx);
+}
+
 static ngx_int_t ubus_process_array(request_ctx_t *request,
 				    struct json_object *obj) {
 	int obj_num = 0;
-	ubus_ctx_t *ctx;
-	pthread_attr_t attr;
 	ngx_int_t rc = NGX_OK;
 	struct json_object *obj_tmp;
 	ngx_http_ubus_loc_conf_t *cglcf;
@@ -630,18 +644,11 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 
 	request->sem = ngx_pcalloc(request->r->pool, sizeof(*request->sem));
 	request->avail_thread = ngx_pcalloc(request->r->pool, sizeof(*request->avail_thread));
-	request->obj_processed = ngx_pcalloc(request->r->pool, sizeof(*request->obj_processed));
 
 	sem_init(request->sem, 0, 1);
 	sem_init(request->avail_thread, 0, cglcf->parallel_req);
-	sem_init(request->obj_processed, 0, 0);
-
-	/* Set pthread DETACHED as we don't use join measure to track them */
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
 	for (obj_num = 0; obj_num < request->objs_num; obj_num++) {
-		pthread_t thread = { 0 };
 
 		/* Wait for an available thread if all busy */
 		sem_wait(request->avail_thread);
@@ -652,40 +659,18 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Spawning thread %d to process request %d", concurrent,
 			       obj_num);
 
-		ctx = setup_ubus_ctx_t(request, obj_tmp, request->res_strs + obj_num);
-
-		pthread_create(&thread, &attr, (void *)ubus_post_object, ctx);
+		ubus_process_object(request, obj_tmp, request->res_strs + obj_num);
 	}
-
-	/* Loop objs_num time to make sure every thread completed and
-	 * every obj has been processed.
-	 */
-	for (obj_num = 0; obj_num < request->objs_num; obj_num++)
-		sem_wait(request->obj_processed);
 
 	sem_destroy(request->sem);
 	ngx_pfree(request->r->pool, request->sem);
 	sem_destroy(request->avail_thread);
 	ngx_pfree(request->r->pool, request->avail_thread);
-	sem_destroy(request->obj_processed);
-	ngx_pfree(request->r->pool, request->obj_processed);
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 		       "Request processed correctly");
 
 	return rc;
-}
-
-static ngx_int_t ubus_process_object(request_ctx_t *request,
-				     struct json_object *obj) {
-	ubus_ctx_t *ctx;
-	enum rpc_status rc;
-
-	ctx = setup_ubus_ctx_t(request, obj, request->res_strs);
-
-	rc = ubus_post_object(ctx);
-
-	return rc == REQUEST_OK ? NGX_OK : NGX_ERROR;
 }
 
 static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
@@ -697,6 +682,9 @@ static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 	request->res_strs = res_strs;
 	request->objs_num = objs_num;
 	request->array = array;
+	request->obj_processed = ngx_pcalloc(request->r->pool, sizeof(*request->obj_processed));
+
+	sem_init(request->obj_processed, 0, 0);
 
 	return NGX_OK;
 }
@@ -705,6 +693,12 @@ static ngx_int_t ngx_http_ubus_finalize_req(request_ctx_t *request,
 					    struct json_object *obj)
 {
 	int obj_num;
+
+	/* Loop objs_num time to make sure every thread completed and
+	 * every obj has been processed.
+	 */
+	for (obj_num = 0; obj_num < request->objs_num; obj_num++)
+		sem_wait(request->obj_processed);
 
 	if (request->array)
 		append_to_output_chain(request, "[");
@@ -728,6 +722,8 @@ static ngx_int_t ngx_http_ubus_finalize_req(request_ctx_t *request,
 		append_to_output_chain(request, "]");
 
 	ngx_pfree(request->r->pool, request->res_strs);
+	sem_destroy(request->obj_processed);
+	ngx_pfree(request->r->pool, request->obj_processed);
 
 	return NGX_OK;
 }
@@ -746,9 +742,7 @@ static ngx_int_t ngx_http_ubus_elaborate_req(request_ctx_t *request,
 		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Json object detected");
 
-		rc = ubus_process_object(request, obj);
-		if (rc != NGX_OK)
-			return rc;
+		ubus_process_object(request, obj, request->res_strs);
 
 		return ngx_http_ubus_finalize_req(request, obj);
 	case json_type_array:
