@@ -714,14 +714,15 @@ static ngx_int_t ngx_http_ubus_finalize_req(request_ctx_t *request,
 		append_to_output_chain(request, "[");
 	for (obj_num = 0; obj_num < request->objs_num; obj_num++) {
 		char *res_str = request->res_strs[obj_num];
-		struct json_object *obj_tmp;
+		struct json_object *obj_tmp = NULL;
 
 		ngx_log_debug1(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
 			       "Writing output of index %d to body", obj_num);
 		if (obj_num > 0)
 			append_to_output_chain(request, ",");
 		if (!res_str) {
-			obj_tmp = json_object_array_get_idx(obj, obj_num);
+			if (request->array)
+				obj_tmp = json_object_array_get_idx(obj, obj_num);
 			res_str = gen_error_from_obj(request->r, obj_tmp, ERROR_INTERNAL);
 		}
 		append_to_output_chain(request, res_str);
