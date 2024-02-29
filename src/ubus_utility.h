@@ -52,6 +52,7 @@ typedef struct {
 	int objs_num;
 	char **res_strs;
 	bool array;
+	struct json_object *jsobj;
 } request_ctx_t;
 
 typedef struct {
