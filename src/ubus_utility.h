@@ -40,8 +40,6 @@ typedef struct {
 	ngx_chain_t *out_chain;
 	ngx_chain_t *out_chain_start;
 	struct ubus_context *ubus_ctx;
-	/* Signal when at least a thread is free */
-	sem_t *avail_thread;
 	/* Special semaphore logic, thread increment this,
 	 * producer decrement this. Is checked n times the
 	 * object to process to check if everything has
