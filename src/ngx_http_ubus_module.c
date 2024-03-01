@@ -318,14 +318,32 @@ static void free_dispatch_ubus(struct dispatch_ubus *du,
 	ngx_pfree(r->pool, du);
 }
 
-static void setup_ubus_ctx_t(ubus_ctx_t *ctx, request_ctx_t *request,
-			     struct json_object *obj, char **res_str) {
+static ngx_int_t setup_ubus_ctx_t(ubus_ctx_t *ctx, request_ctx_t *request,
+				  struct json_object *obj, char **res_str) {
+	ngx_http_ubus_loc_conf_t *cglcf;
+	struct ubus_context *ubus_ctx;
+
+	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
+
+	ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
+	if (!ubus_ctx) {
+		ngx_log_error(NGX_LOG_ERR, request->r->connection->log, 0,
+			      "Unable to connect to ubus socket: %s",
+			      cglcf->socket_path.data);
+		ubus_single_error(request, ERROR_INTERNAL);
+		return NGX_ERROR;
+	}
+
 	ctx->ubus = setup_dispatch_ubus(obj, request->r);
 	ctx->request = request;
 	ctx->res_str = res_str;
+	ctx->ubus_ctx = ubus_ctx;
+
+	return NGX_OK;
 }
 
 static void free_ubus_ctx_t(ubus_ctx_t *ctx, ngx_http_request_t *r) {
+	ubus_free(ctx->ubus_ctx);
 	free_dispatch_ubus(ctx->ubus, r);
 }
 
@@ -358,7 +376,7 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	bool allow = false;
 	uint32_t id;
 
-	if (ubus_lookup_id(ctx->request->ubus_ctx, "session", &id))
+	if (ubus_lookup_id(ctx->ubus_ctx, "session", &id))
 		return false;
 
 	req = ngx_pcalloc(ctx->request->r->pool, sizeof(*req));
@@ -368,7 +386,7 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	blobmsg_add_string(req, "object", obj);
 	blobmsg_add_string(req, "function", fun);
 
-	ubus_invoke(ctx->request->ubus_ctx, id, "access", req->head, ubus_allowed_cb,
+	ubus_invoke(ctx->ubus_ctx, id, "access", req->head, ubus_allowed_cb,
 		    &allow, script_timeout * 500);
 
 	blob_buf_free(req);
@@ -414,7 +432,7 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	if (array)
 		sem_wait(request->sem);
 
-	ret = ubus_invoke(request->ubus_ctx, du->obj_id, du->func, req->head,
+	ret = ubus_invoke(ctx->ubus_ctx, du->obj_id, du->func, req->head,
 			  ubus_request_cb, data, cglcf->script_timeout * 1000);
 
 	if (array)
@@ -465,7 +483,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 		if (array)
 			sem_wait(request->sem);
 
-		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, data);
+		ubus_lookup(ctx->ubus_ctx, NULL, ubus_list_cb, data);
 
 		if (array)
 			sem_post(request->sem);
@@ -479,7 +497,7 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 			if (array)
 				sem_wait(request->sem);
 
-			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
+			ubus_lookup(ctx->ubus_ctx, blobmsg_data(cur),
 				    ubus_list_cb, data);
 
 			if (array)
@@ -543,7 +561,7 @@ static void ubus_post_object(void *data, ngx_log_t *log) {
 		if (array)
 			sem_wait(request->sem);
 
-		ret = ubus_lookup_id(request->ubus_ctx, rpc_data->object, &du->obj_id);
+		ret = ubus_lookup_id(ctx->ubus_ctx, rpc_data->object, &du->obj_id);
 
 		if (array)
 			sem_post(request->sem);
@@ -614,6 +632,7 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 				     char **res_str) {
 	ngx_http_ubus_loc_conf_t *cglcf;
 	ngx_thread_task_t *task;
+	ngx_int_t rc;
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
@@ -622,7 +641,9 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 	task->event.handler = ubus_post_object_completition;
 	task->event.data = task->ctx;
 
-	setup_ubus_ctx_t(task->ctx, request, obj, res_str);
+	rc = setup_ubus_ctx_t(task->ctx, request, obj, res_str);
+	if (rc != NGX_OK)
+		return rc;
 
 	ngx_thread_task_post(cglcf->thread_pool, task);
 
@@ -631,6 +652,7 @@ static ngx_int_t ubus_process_object(request_ctx_t *request,
 
 static ngx_int_t ubus_process_array(request_ctx_t *request,
 				    struct json_object *obj) {
+	ngx_int_t rc;
 	int obj_num;
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
@@ -645,7 +667,9 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 			       "Spawning thread %d to process request %d", concurrent,
 			       obj_num);
 
-		ubus_process_object(request, obj_tmp, request->res_strs + obj_num);
+		rc = ubus_process_object(request, obj_tmp, request->res_strs + obj_num);
+		if (rc != NGX_OK)
+			return rc;
 	}
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, request->r->connection->log, 0,
@@ -715,7 +739,6 @@ finalize:
 	ngx_pfree(request->r->pool, request->sem);
 
 	json_object_put(request->jsobj);
-	ubus_free(request->ubus_ctx);
 	ngx_http_finalize_request(request->r, rc);
 }
 
@@ -771,7 +794,6 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	struct json_tokener *jstok;
 	ngx_int_t rc = NGX_HTTP_OK;
 	enum json_tokener_error jserr;
-	struct ubus_context *ubus_ctx;
 	ngx_http_ubus_loc_conf_t *cglcf;
 	struct json_object *jsobj = NULL;
 
@@ -782,22 +804,13 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	request->r = r;
 
 	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
-	ubus_ctx = ubus_connect((char *)cglcf->socket_path.data);
-	if (!ubus_ctx) {
-		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-			      "Unable to connect to ubus socket: %s",
-			      cglcf->socket_path.data);
-		ubus_single_error(request, ERROR_INTERNAL);
-		goto finalize;
-	}
-	request->ubus_ctx = ubus_ctx;
 
 	jstok = json_tokener_new();
 	if (!jstok) {
 		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
 			      "Error jstok struct not ok");
 		ubus_single_error(request, ERROR_PARSE);
-		goto free_ubus;
+		goto finalize;
 	}
 
 	ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -861,8 +874,6 @@ free_obj:
 	json_object_put(jsobj);
 free_tok:
 	json_tokener_free(jstok);
-free_ubus:
-	ubus_free(ubus_ctx);
 finalize:
 	ngx_pfree(r->pool, task);
 	ngx_http_finalize_request(request->r, NGX_HTTP_OK);
