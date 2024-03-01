@@ -39,6 +39,7 @@ typedef struct {
 	int res_len;
 	ngx_chain_t *out_chain;
 	ngx_chain_t *out_chain_start;
+	struct ubus_context *ubus_ctx;
 	sem_t *sem;
 	/* Signal when at least a thread is free */
 	sem_t *avail_thread;
@@ -55,7 +56,6 @@ typedef struct {
 } request_ctx_t;
 
 typedef struct {
-	struct ubus_context *ubus_ctx;
 	struct dispatch_ubus *ubus;
 	char **res_str;
 	request_ctx_t *request;
