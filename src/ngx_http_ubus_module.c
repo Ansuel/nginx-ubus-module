@@ -27,6 +27,7 @@ typedef struct {
 	ngx_flag_t enable;
 	ngx_uint_t parallel_req;
 	ngx_thread_pool_t *thread_pool;
+	pthread_mutex_t *ubus_mutex;
 } ngx_http_ubus_loc_conf_t;
 
 static ngx_command_t ngx_http_ubus_commands[] = {
@@ -354,11 +355,19 @@ static ngx_int_t ngx_http_ubus_send_body(request_ctx_t *request) {
 
 static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 			 const char *sid, const char *obj, const char *fun) {
+	request_ctx_t *request = ctx->request;
+	ngx_http_ubus_loc_conf_t *cglcf;
 	struct blob_buf *req;
 	bool allow = false;
+	ngx_int_t rc;
 	uint32_t id;
 
-	if (ubus_lookup_id(ctx->request->ubus_ctx, "session", &id))
+	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
+
+	pthread_mutex_lock(cglcf->ubus_mutex);
+	rc = ubus_lookup_id(request->ubus_ctx, "session", &id);
+	pthread_mutex_unlock(cglcf->ubus_mutex);
+	if (rc)
 		return false;
 
 	req = ngx_pcalloc(ctx->request->r->pool, sizeof(*req));
@@ -368,8 +377,10 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	blobmsg_add_string(req, "object", obj);
 	blobmsg_add_string(req, "function", fun);
 
-	ubus_invoke(ctx->request->ubus_ctx, id, "access", req->head, ubus_allowed_cb,
-		    &allow, script_timeout * 500);
+	pthread_mutex_lock(cglcf->ubus_mutex);
+	ubus_invoke(request->ubus_ctx, id, "access", req->head,
+		    ubus_allowed_cb, &allow, script_timeout * 500);
+	pthread_mutex_unlock(cglcf->ubus_mutex);
 
 	blob_buf_free(req);
 	ngx_pfree(ctx->request->r->pool, req);
@@ -383,7 +394,6 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 	void *r;
 	int ret, rem;
 	struct blob_attr *cur;
-	bool array = request->array;
 	enum rpc_status rc = REQUEST_OK;
 	ngx_http_ubus_loc_conf_t *cglcf;
 	struct dispatch_ubus *du = ctx->ubus;
@@ -411,14 +421,10 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
 	r = blobmsg_open_array(res_obj, "result");
 
-	if (array)
-		sem_wait(request->sem);
-
+	pthread_mutex_lock(cglcf->ubus_mutex);
 	ret = ubus_invoke(request->ubus_ctx, du->obj_id, du->func, req->head,
 			  ubus_request_cb, data, cglcf->script_timeout * 1000);
-
-	if (array)
-		sem_post(request->sem);
+	pthread_mutex_unlock(cglcf->ubus_mutex);
 
 	blobmsg_add_u32(res_obj, "", ret);
 	if (!ret)
@@ -442,14 +448,15 @@ out:
 
 static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				      struct blob_attr *params) {
-
+	ngx_http_ubus_loc_conf_t *cglcf;
 	struct blob_buf *res_obj;
 	struct dispatch_ubus *du;
-	bool array = request->array;
 	struct list_data *data;
 	struct blob_attr *cur;
 	void *r, *t;
 	int rem;
+
+	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
 	du = ctx->ubus;
 	res_obj = ngx_pcalloc(request->r->pool, sizeof(*res_obj));
@@ -462,13 +469,9 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
 		t = blobmsg_open_array(res_obj, "");
 
-		if (array)
-			sem_wait(request->sem);
-
+		pthread_mutex_lock(cglcf->ubus_mutex);
 		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, data);
-
-		if (array)
-			sem_post(request->sem);
+		pthread_mutex_unlock(cglcf->ubus_mutex);
 
 		blobmsg_close_array(res_obj, t);
 	} else {
@@ -476,14 +479,10 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 		data->verbose = true;
 
 		__blob_for_each_attr(cur, blobmsg_data(params), rem) {
-			if (array)
-				sem_wait(request->sem);
-
+			pthread_mutex_lock(cglcf->ubus_mutex);
 			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
 				    ubus_list_cb, data);
-
-			if (array)
-				sem_post(request->sem);
+			pthread_mutex_unlock(cglcf->ubus_mutex);
 		}
 	}
 	blobmsg_close_array(res_obj, r);
@@ -502,7 +501,6 @@ static void ubus_post_object(void *data, ngx_log_t *log) {
 	request_ctx_t *request = ctx->request;
 	struct dispatch_ubus *du = ctx->ubus;
 	ngx_http_ubus_loc_conf_t *cglcf;
-	bool array = request->array;
 	struct rpc_data *rpc_data;
 	struct blob_buf *buf;
 	enum rpc_status rc;
@@ -540,27 +538,16 @@ static void ubus_post_object(void *data, ngx_log_t *log) {
 
 		du->func = rpc_data->function;
 
-		if (array)
-			sem_wait(request->sem);
-
+		pthread_mutex_lock(cglcf->ubus_mutex);
 		ret = ubus_lookup_id(request->ubus_ctx, rpc_data->object, &du->obj_id);
-
-		if (array)
-			sem_post(request->sem);
-
+		pthread_mutex_unlock(cglcf->ubus_mutex);
 		if (ret) {
 			rc = ERROR_OBJECT;
 			goto free_rpc_data;
 		}
 
-		if (array)
-			sem_wait(request->sem);
-
 		ret = ubus_allowed(ctx, cglcf->script_timeout, rpc_data->sid,
 				   rpc_data->object, rpc_data->function);
-
-		if (array)
-			sem_post(request->sem);
 
 		if (!cglcf->noauth && !ret) {
 			rc = ERROR_ACCESS;
@@ -711,8 +698,6 @@ finalize:
 	ngx_pfree(request->r->pool, request->res_strs);
 	sem_destroy(request->obj_processed);
 	ngx_pfree(request->r->pool, request->obj_processed);
-	sem_destroy(request->sem);
-	ngx_pfree(request->r->pool, request->sem);
 
 	json_object_put(request->jsobj);
 	ubus_free(request->ubus_ctx);
@@ -729,10 +714,8 @@ static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 	request->objs_num = objs_num;
 	request->array = array;
 	request->obj_processed = ngx_pcalloc(request->r->pool, sizeof(*request->obj_processed));
-	request->sem = ngx_pcalloc(request->r->pool, sizeof(*request->sem));
 
 	sem_init(request->obj_processed, 0, 0);
-	sem_init(request->sem, 0, 1);
 
 	return NGX_OK;
 }
@@ -956,6 +939,14 @@ static char *ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent,
 	}
 
 	conf->thread_pool = ngx_thread_pool_add(cf, &ngx_http_ubus_thread_pool_name);
+
+	/*
+	 * Ubus have problem with concurrent request and cause deadlock and even
+	 * heap corruption. To prevent this, init a global mutex that every request
+	 * will use to enforce single ubus connection.
+	 */
+	conf->ubus_mutex = malloc(sizeof(*conf->ubus_mutex));
+	pthread_mutex_init(conf->ubus_mutex, NULL);
 
 	return NGX_CONF_OK;
 }

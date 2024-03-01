@@ -40,7 +40,6 @@ typedef struct {
 	ngx_chain_t *out_chain;
 	ngx_chain_t *out_chain_start;
 	struct ubus_context *ubus_ctx;
-	sem_t *sem;
 	/* Signal when at least a thread is free */
 	sem_t *avail_thread;
 	/* Special semaphore logic, thread increment this,
