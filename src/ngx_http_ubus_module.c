@@ -10,7 +10,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-#include <ubus_utility.h>
+#include "ubus_utility.h"
 
 static void *ngx_http_ubus_create_loc_conf(ngx_conf_t *cf);
 
