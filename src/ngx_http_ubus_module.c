@@ -589,9 +589,15 @@ out:
 
 static void ubus_post_object_completition(ngx_event_t *ev) {
 	ubus_ctx_t *ctx = ev->data;
+	request_ctx_t *request;
 
-	/* Signal obj has been processed */
-	sem_post(ctx->request->obj_processed);
+	request = ctx->request;
+
+	ngx_thread_mutex_lock(request->mutex, request->r->connection->log);
+	request->objs_processed++;
+	ngx_thread_mutex_unlock(request->mutex, request->r->connection->log);
+	/* Wake finalize thread to signal object processed */
+	ngx_thread_cond_signal(request->condition, request->r->connection->log);
 
 	free_ubus_ctx_t(ctx, ctx->request->r);
 }
@@ -644,13 +650,14 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 static void ngx_http_ubus_finalize_req(void *data, ngx_log_t *log)
 {
 	request_ctx_t *request = data;
-	int obj_num;
 
-	/* Loop objs_num time to make sure every thread completed and
-	 * every obj has been processed.
+	/*
+	 * Wait for every thread to finish processing all the objects.
 	 */
-	for (obj_num = 0; obj_num < request->objs_num; obj_num++)
-		sem_wait(request->obj_processed);
+	ngx_thread_mutex_lock(request->mutex, log);
+	while (request->objs_processed != request->objs_num)
+		ngx_thread_cond_wait(request->condition, request->mutex, log);
+	ngx_thread_mutex_unlock(request->mutex, log);
 }
 
 static void ngx_http_ubus_finalize_req_completion(ngx_event_t *ev) {
@@ -696,8 +703,11 @@ static void ngx_http_ubus_finalize_req_completion(ngx_event_t *ev) {
 
 finalize:
 	ngx_pfree(request->r->pool, request->res_strs);
-	sem_destroy(request->obj_processed);
-	ngx_pfree(request->r->pool, request->obj_processed);
+
+	ngx_thread_mutex_destroy(request->mutex, request->r->connection->log);
+	ngx_pfree(request->r->pool, request->mutex);
+	ngx_thread_cond_destroy(request->condition, request->r->connection->log);
+	ngx_pfree(request->r->pool, request->condition);
 
 	json_object_put(request->jsobj);
 	ubus_free(request->ubus_ctx);
@@ -713,9 +723,11 @@ static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 	request->res_strs = res_strs;
 	request->objs_num = objs_num;
 	request->array = array;
-	request->obj_processed = ngx_pcalloc(request->r->pool, sizeof(*request->obj_processed));
+	request->mutex = ngx_pcalloc(request->r->pool, sizeof(*request->mutex));
+	request->condition = ngx_pcalloc(request->r->pool, sizeof(*request->condition));
 
-	sem_init(request->obj_processed, 0, 0);
+	ngx_thread_mutex_create(request->mutex, request->r->connection->log);
+	ngx_thread_cond_create(request->condition, request->r->connection->log);
 
 	return NGX_OK;
 }

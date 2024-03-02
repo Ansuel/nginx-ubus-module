@@ -40,12 +40,14 @@ typedef struct {
 	ngx_chain_t *out_chain;
 	ngx_chain_t *out_chain_start;
 	struct ubus_context *ubus_ctx;
-	/* Special semaphore logic, thread increment this,
-	 * producer decrement this. Is checked n times the
-	 * object to process to check if everything has
-	 * been processed. (instead of relying to pthread join)
+	/*
+	 * To finalize request use thread and conf
+	 * logic to wake finalize thread and terminate
+	 * it once objs_processed == objs_num.
 	 */
-	sem_t *obj_processed;
+	ngx_thread_mutex_t *mutex;
+	ngx_thread_cond_t *condition;
+	int objs_processed;
 	int objs_num;
 	char **res_strs;
 	bool array;
