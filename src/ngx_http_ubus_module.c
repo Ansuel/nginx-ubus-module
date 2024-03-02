@@ -360,17 +360,14 @@ static ngx_int_t ngx_http_ubus_send_body(request_ctx_t *request) {
 static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 			 const char *sid, const char *obj, const char *fun) {
 	request_ctx_t *request = ctx->request;
-	ngx_http_ubus_loc_conf_t *cglcf;
 	struct blob_buf *req;
 	bool allow = false;
 	ngx_int_t rc;
 	uint32_t id;
 
-	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
-
-	pthread_mutex_lock(cglcf->ubus_mutex);
+	pthread_mutex_lock(request->ubus_mutex);
 	rc = ubus_lookup_id(request->ubus_ctx, "session", &id);
-	pthread_mutex_unlock(cglcf->ubus_mutex);
+	pthread_mutex_unlock(request->ubus_mutex);
 	if (rc)
 		return false;
 
@@ -381,10 +378,10 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	blobmsg_add_string(req, "object", obj);
 	blobmsg_add_string(req, "function", fun);
 
-	pthread_mutex_lock(cglcf->ubus_mutex);
+	pthread_mutex_lock(request->ubus_mutex);
 	ubus_invoke(request->ubus_ctx, id, "access", req->head,
 		    ubus_allowed_cb, &allow, script_timeout * 500);
-	pthread_mutex_unlock(cglcf->ubus_mutex);
+	pthread_mutex_unlock(request->ubus_mutex);
 
 	blob_buf_free(req);
 	free(req);
@@ -425,10 +422,10 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
 	r = blobmsg_open_array(res_obj, "result");
 
-	pthread_mutex_lock(cglcf->ubus_mutex);
+	pthread_mutex_lock(request->ubus_mutex);
 	ret = ubus_invoke(request->ubus_ctx, du->obj_id, du->func, req->head,
 			  ubus_request_cb, data, cglcf->script_timeout * 1000);
-	pthread_mutex_unlock(cglcf->ubus_mutex);
+	pthread_mutex_unlock(request->ubus_mutex);
 
 	blobmsg_add_u32(res_obj, "", ret);
 	if (!ret)
@@ -452,15 +449,12 @@ out:
 
 static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 				      struct blob_attr *params) {
-	ngx_http_ubus_loc_conf_t *cglcf;
 	struct blob_buf *res_obj;
 	struct dispatch_ubus *du;
 	struct list_data *data;
 	struct blob_attr *cur;
 	void *r, *t;
 	int rem;
-
-	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
 	du = ctx->ubus;
 	res_obj = calloc(1, sizeof(*res_obj));
@@ -474,9 +468,9 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
 		t = blobmsg_open_array(res_obj, "");
 
-		pthread_mutex_lock(cglcf->ubus_mutex);
+		pthread_mutex_lock(request->ubus_mutex);
 		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, data);
-		pthread_mutex_unlock(cglcf->ubus_mutex);
+		pthread_mutex_unlock(request->ubus_mutex);
 
 		blobmsg_close_array(res_obj, t);
 	} else {
@@ -484,10 +478,10 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 		data->verbose = true;
 
 		__blob_for_each_attr(cur, blobmsg_data(params), rem) {
-			pthread_mutex_lock(cglcf->ubus_mutex);
+			pthread_mutex_lock(request->ubus_mutex);
 			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
 				    ubus_list_cb, data);
-			pthread_mutex_unlock(cglcf->ubus_mutex);
+			pthread_mutex_unlock(request->ubus_mutex);
 		}
 	}
 	blobmsg_close_array(res_obj, r);
@@ -543,9 +537,9 @@ static void ubus_post_object(void *data, ngx_log_t *log) {
 
 		du->func = rpc_data->function;
 
-		pthread_mutex_lock(cglcf->ubus_mutex);
+		pthread_mutex_lock(request->ubus_mutex);
 		ret = ubus_lookup_id(request->ubus_ctx, rpc_data->object, &du->obj_id);
-		pthread_mutex_unlock(cglcf->ubus_mutex);
+		pthread_mutex_unlock(request->ubus_mutex);
 		if (ret) {
 			rc = ERROR_OBJECT;
 			goto free_rpc_data;
@@ -734,7 +728,10 @@ finalize:
 static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 					int objs_num, bool array)
 {
+	ngx_http_ubus_loc_conf_t *cglcf;
 	char **res_strs;
+
+	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
 	res_strs = calloc(objs_num, sizeof(*res_strs));
 	request->res_strs = res_strs;
@@ -742,6 +739,8 @@ static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 	request->array = array;
 	request->mutex = malloc(sizeof(*request->mutex));
 	request->condition = malloc(sizeof(*request->condition));
+	/* Add reference to ubus_mutex to make it easier to access */
+	request->ubus_mutex = cglcf->ubus_mutex;
 
 	ngx_thread_mutex_create(request->mutex, request->r->connection->log);
 	ngx_thread_cond_create(request->condition, request->r->connection->log);
