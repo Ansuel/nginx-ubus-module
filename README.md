@@ -15,8 +15,7 @@ location /ubus {
         ubus_interpreter;
         ubus_socket_path /var/run/ubus.sock;
         ubus_script_timeout 600;
-	      ubus_parallel_req 2;
-      	ubus_cors off;
+        ubus_cors off;
 }
 ```
 
@@ -46,15 +45,6 @@ Context: location
 Ubus connection will be terminated after the timeout is exceeded
 
 <pre>
-Syntax:  <b>ubus_parallel_req</b>;
-Default: 1
-Context: location
-</pre>
-
-With batched request, the module will create n thread to handle request quickly. 
-_**Note**_: Ubus doesn't support parallel request so the speedup is not too noticable
-
-<pre>
 Syntax:  <b>ubus_cors</b>;
 Default: 0
 Context: location
@@ -70,3 +60,22 @@ Context: location
 
 Only for test purpose. This will denied every request.
 
+## Thread support
+
+With Nginx compiled with threads support `--with-threads`, module will use (and requires) Nginx Thread Pool feature. As Nginx configuration suggest, this module will require in the main configuration a Thread Pool and in the location section reference to the named Thread Pool with the name `ubus_interpreter`.
+
+<pre>
+<b>thread_pool ubus_interpreter threads=16;</b>
+</pre>
+<pre>
+location /ubus {
+        ubus_interpreter;
+        ubus_socket_path /var/run/ubus/ubus.sock;
+        ubus_parallel_req 20;
+	<b>aio threads=ubus_interpreter;</b>
+}
+</pre>
+
+Ubus itself doesn't like concurrent request so the performance benefits from this
+are minimal, but this will permits to speedup and prepare each request by removing
+the overhead of blocking nginx execution waiting for ubus response.
