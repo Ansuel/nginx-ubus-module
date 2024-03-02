@@ -26,8 +26,10 @@ typedef struct {
 	ngx_flag_t noauth;
 	ngx_flag_t enable;
 	ngx_uint_t parallel_req;
+#ifdef NGX_THREADS
 	ngx_thread_pool_t *thread_pool;
 	pthread_mutex_t *ubus_mutex;
+#endif
 } ngx_http_ubus_loc_conf_t;
 
 static ngx_command_t ngx_http_ubus_commands[] = {
@@ -365,9 +367,9 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	ngx_int_t rc;
 	uint32_t id;
 
-	pthread_mutex_lock(request->ubus_mutex);
+	UBUS_LOCK(request);
 	rc = ubus_lookup_id(request->ubus_ctx, "session", &id);
-	pthread_mutex_unlock(request->ubus_mutex);
+	UBUS_UNLOCK(request);
 	if (rc)
 		return false;
 
@@ -378,10 +380,10 @@ static bool ubus_allowed(ubus_ctx_t *ctx, ngx_int_t script_timeout,
 	blobmsg_add_string(req, "object", obj);
 	blobmsg_add_string(req, "function", fun);
 
-	pthread_mutex_lock(request->ubus_mutex);
+	UBUS_LOCK(request);
 	ubus_invoke(request->ubus_ctx, id, "access", req->head,
 		    ubus_allowed_cb, &allow, script_timeout * 500);
-	pthread_mutex_unlock(request->ubus_mutex);
+	UBUS_UNLOCK(request);
 
 	blob_buf_free(req);
 	free(req);
@@ -422,10 +424,10 @@ static enum rpc_status ubus_send_request(request_ctx_t *request,
 
 	r = blobmsg_open_array(res_obj, "result");
 
-	pthread_mutex_lock(request->ubus_mutex);
+	UBUS_LOCK(request);
 	ret = ubus_invoke(request->ubus_ctx, du->obj_id, du->func, req->head,
 			  ubus_request_cb, data, cglcf->script_timeout * 1000);
-	pthread_mutex_unlock(request->ubus_mutex);
+	UBUS_UNLOCK(request);
 
 	blobmsg_add_u32(res_obj, "", ret);
 	if (!ret)
@@ -468,9 +470,9 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 	if (!params || blob_id(params) != BLOBMSG_TYPE_ARRAY) {
 		t = blobmsg_open_array(res_obj, "");
 
-		pthread_mutex_lock(request->ubus_mutex);
+		UBUS_LOCK(request);
 		ubus_lookup(request->ubus_ctx, NULL, ubus_list_cb, data);
-		pthread_mutex_unlock(request->ubus_mutex);
+		UBUS_UNLOCK(request);
 
 		blobmsg_close_array(res_obj, t);
 	} else {
@@ -478,10 +480,10 @@ static enum rpc_status ubus_send_list(request_ctx_t *request, ubus_ctx_t *ctx,
 		data->verbose = true;
 
 		__blob_for_each_attr(cur, blobmsg_data(params), rem) {
-			pthread_mutex_lock(request->ubus_mutex);
+			UBUS_LOCK(request);
 			ubus_lookup(request->ubus_ctx, blobmsg_data(cur),
 				    ubus_list_cb, data);
-			pthread_mutex_unlock(request->ubus_mutex);
+			UBUS_UNLOCK(request);
 		}
 	}
 	blobmsg_close_array(res_obj, r);
@@ -537,9 +539,9 @@ static void ubus_post_object(void *data, ngx_log_t *log) {
 
 		du->func = rpc_data->function;
 
-		pthread_mutex_lock(request->ubus_mutex);
+		UBUS_LOCK(request);
 		ret = ubus_lookup_id(request->ubus_ctx, rpc_data->object, &du->obj_id);
-		pthread_mutex_unlock(request->ubus_mutex);
+		UBUS_UNLOCK(request);
 		if (ret) {
 			rc = ERROR_OBJECT;
 			goto free_rpc_data;
@@ -588,6 +590,7 @@ out:
 
 static void ubus_post_object_completition(ngx_event_t *ev) {
 	ubus_ctx_t *ctx = ev->data;
+#ifdef NGX_THREADS
 	request_ctx_t *request;
 
 	request = ctx->request;
@@ -597,6 +600,7 @@ static void ubus_post_object_completition(ngx_event_t *ev) {
 	ngx_thread_mutex_unlock(request->mutex, request->r->connection->log);
 	/* Wake finalize thread to signal object processed */
 	ngx_thread_cond_signal(request->condition, request->r->connection->log);
+#endif
 
 	free_ubus_ctx_t(ctx);
 }
@@ -604,22 +608,41 @@ static void ubus_post_object_completition(ngx_event_t *ev) {
 static ngx_int_t ubus_process_object(request_ctx_t *request,
 				     struct json_object *obj,
 				     char **res_str) {
+#ifdef NGX_THREADS
 	ngx_http_ubus_loc_conf_t *cglcf;
 	ngx_thread_task_t *task;
+#endif
+	ngx_event_t *event;
+	ubus_ctx_t *ctx;
 	ngx_int_t rc;
 
+#ifdef NGX_THREADS
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
 
-	task = ngx_thread_task_alloc(request->r->pool, sizeof(ubus_ctx_t));
+	task = ngx_thread_task_alloc(request->r->pool, sizeof(*ctx));
+	ctx = task->ctx;
 	task->handler = ubus_post_object;
-	task->event.handler = ubus_post_object_completition;
-	task->event.data = task->ctx;
+	event = &task->event;
+	event->handler = ubus_post_object_completition;
+	event->data = ctx;
+#else
+	event = malloc(sizeof(*event));
+	ctx = malloc(sizeof(*ctx));
+	event->data = ctx;
+#endif
 
-	rc = setup_ubus_ctx_t(task->ctx, request, obj, res_str);
+	rc = setup_ubus_ctx_t(ctx, request, obj, res_str);
 	if (rc != NGX_OK)
 		return rc;
 
+#ifdef NGX_THREADS
 	ngx_thread_task_post(cglcf->thread_pool, task);
+#else
+	ubus_post_object(ctx, request->r->connection->log);
+	ubus_post_object_completition(event);
+	free(event);
+	free(ctx);
+#endif
 
 	return NGX_OK;
 }
@@ -658,6 +681,7 @@ static ngx_int_t ubus_process_array(request_ctx_t *request,
 	return NGX_OK;
 }
 
+#ifdef NGX_THREADS
 static void ngx_http_ubus_finalize_req(void *data, ngx_log_t *log)
 {
 	request_ctx_t *request = data;
@@ -670,6 +694,7 @@ static void ngx_http_ubus_finalize_req(void *data, ngx_log_t *log)
 		ngx_thread_cond_wait(request->condition, request->mutex, log);
 	ngx_thread_mutex_unlock(request->mutex, log);
 }
+#endif
 
 static void ngx_http_ubus_finalize_req_completion(ngx_event_t *ev) {
 	request_ctx_t *request = ev->data;
@@ -715,10 +740,12 @@ static void ngx_http_ubus_finalize_req_completion(ngx_event_t *ev) {
 finalize:
 	free(request->res_strs);
 
+#ifdef NGX_THREADS
 	ngx_thread_mutex_destroy(request->mutex, request->r->connection->log);
 	free(request->mutex);
 	ngx_thread_cond_destroy(request->condition, request->r->connection->log);
 	free(request->condition);
+#endif
 
 	json_object_put(request->jsobj);
 	ubus_free(request->ubus_ctx);
@@ -728,15 +755,18 @@ finalize:
 static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 					int objs_num, bool array)
 {
-	ngx_http_ubus_loc_conf_t *cglcf;
 	char **res_strs;
+#ifdef NGX_THREADS
+	ngx_http_ubus_loc_conf_t *cglcf;
 
 	cglcf = ngx_http_get_module_loc_conf(request->r, ngx_http_ubus_module);
+#endif
 
 	res_strs = calloc(objs_num, sizeof(*res_strs));
 	request->res_strs = res_strs;
 	request->objs_num = objs_num;
 	request->array = array;
+#ifdef NGX_THREADS
 	request->mutex = malloc(sizeof(*request->mutex));
 	request->condition = malloc(sizeof(*request->condition));
 	/* Add reference to ubus_mutex to make it easier to access */
@@ -744,6 +774,7 @@ static ngx_int_t ngx_http_ubus_init_req(request_ctx_t *request,
 
 	ngx_thread_mutex_create(request->mutex, request->r->connection->log);
 	ngx_thread_cond_create(request->condition, request->r->connection->log);
+#endif
 
 	return NGX_OK;
 }
@@ -778,6 +809,7 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	off_t len;
 	off_t pos = 0;
 	ngx_chain_t *in;
+	ngx_event_t *event;
 	request_ctx_t *request;
 	struct json_tokener *jstok;
 	ngx_int_t rc = NGX_HTTP_OK;
@@ -786,10 +818,14 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 	ngx_http_ubus_loc_conf_t *cglcf;
 	struct json_object *jsobj = NULL;
 
+#ifdef NGX_THREADS
 	ngx_thread_task_t *task;
 
 	task = ngx_thread_task_alloc(r->pool, sizeof(*request));
 	request = task->ctx;
+#else	
+	request = ngx_pcalloc(r->pool, sizeof(*request));
+#endif
 	request->r = r;
 
 	cglcf = ngx_http_get_module_loc_conf(r, ngx_http_ubus_module);
@@ -858,15 +894,23 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 		goto free_obj;
 	}
 
+#ifdef NGX_THREADS
 	task->handler = ngx_http_ubus_finalize_req;
-	task->event.handler = ngx_http_ubus_finalize_req_completion;
-	task->event.data = request;
+	event = &task->event;
+	event->handler = ngx_http_ubus_finalize_req_completion;
+	event->data = request;
 
 	ngx_thread_task_post(cglcf->thread_pool, task);
 
-	json_tokener_free(jstok);
-
 	r->main->blocked++;
+#else
+	event = malloc(sizeof(*event));
+	event->data = request;
+	ngx_http_ubus_finalize_req_completion(event);
+	free(event);
+#endif
+
+	json_tokener_free(jstok);
 
 	return;
 
@@ -877,7 +921,11 @@ free_tok:
 free_ubus:
 	ubus_free(ubus_ctx);
 finalize:
+#ifdef NGX_THREADS
 	ngx_pfree(r->pool, task);
+#else
+	ngx_pfree(r->pool, request);
+#endif
 	ngx_http_finalize_request(request->r, NGX_HTTP_OK);
 }
 
@@ -938,7 +986,9 @@ static void *ngx_http_ubus_create_loc_conf(ngx_conf_t *cf) {
 	return conf;
 }
 
+#ifdef NGX_THREADS
 static ngx_str_t ngx_http_ubus_thread_pool_name = ngx_string("ubus_interpreter");
+#endif
 
 static char *ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent,
 					  void *child) {
@@ -968,6 +1018,7 @@ static char *ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent,
 		return NGX_CONF_ERROR;
 	}
 
+#ifdef NGX_THREADS
 	conf->thread_pool = ngx_thread_pool_add(cf, &ngx_http_ubus_thread_pool_name);
 
 	/*
@@ -977,6 +1028,7 @@ static char *ngx_http_ubus_merge_loc_conf(ngx_conf_t *cf, void *parent,
 	 */
 	conf->ubus_mutex = malloc(sizeof(*conf->ubus_mutex));
 	pthread_mutex_init(conf->ubus_mutex, NULL);
+#endif
 
 	return NGX_CONF_OK;
 }

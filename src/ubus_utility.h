@@ -18,13 +18,20 @@
 #include <libubox/avl.h>
 #include <libubox/avl-cmp.h>
 
-#include <pthread.h>
-
 #include <libubus.h>
 #include <json-c/json.h>
 
 #define UBUS_MAX_POST_SIZE 65536
 #define UBUS_DEFAULT_SID "00000000000000000000000000000000"
+
+/* Ubus doesn't need global lock if single thread implementation is used */
+#ifdef NGX_THREADS
+#define UBUS_LOCK(request) pthread_mutex_lock(request->ubus_mutex);
+#define UBUS_UNLOCK(request) pthread_mutex_unlock(request->ubus_mutex);
+#else
+#define UBUS_LOCK(request) do {} while(0)
+#define UBUS_UNLOCK(request) do {} while(0)
+#endif
 
 struct dispatch_ubus {
 	struct json_object *jsobj;
@@ -44,14 +51,16 @@ typedef struct {
 	 * logic to wake finalize thread and terminate
 	 * it once objs_processed == objs_num.
 	 */
-	ngx_thread_mutex_t *ubus_mutex;
-	ngx_thread_mutex_t *mutex;
-	ngx_thread_cond_t *condition;
-	int objs_processed;
 	int objs_num;
 	char **res_strs;
 	bool array;
 	struct json_object *jsobj;
+#ifdef NGX_THREADS
+	ngx_thread_mutex_t *ubus_mutex;
+	ngx_thread_mutex_t *mutex;
+	ngx_thread_cond_t *condition;
+	int objs_processed;
+#endif
 } request_ctx_t;
 
 typedef struct {
