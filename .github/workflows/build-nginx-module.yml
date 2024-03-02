@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-backports:
-    name: Build NGINX Module (${{ matrix.compiler }})
+    name: Build NGINX Module (${{ matrix.compiler }}${{ matrix.thread && ', thread' || ''}})
     runs-on: ubuntu-latest
 
     container:
@@ -20,6 +20,12 @@ jobs:
             dependency: gcc
           - compiler: clang
             dependency: clang clang-analyzer
+          - compiler: gcc
+            dependency: gcc
+            thread: true
+          - compiler: clang
+            dependency: clang clang-analyzer
+            thread: true
 
     steps:
       - name: Install Dependencies
@@ -70,22 +76,24 @@ jobs:
       - name: Compile Nginx
         env:
           NGINX_VERSION: ${{ steps.determine_nginx_version.outputs.nginx_version }}
+          THREAD_SUPPORT: ${{ matrix.thread && '--with-threads' || '' }}
         run: |
           curl "http://nginx.org/download/nginx-${{ env.NGINX_VERSION }}.tar.gz" > nginx-${{ env.NGINX_VERSION }}.tar.gz
           tar -xf nginx-${{ env.NGINX_VERSION }}.tar.gz
 
           cd nginx-${{ env.NGINX_VERSION }}
-          ./configure --with-threads --add-dynamic-module=../nginx-ubus-mod
+          ./configure ${{ env.THREAD_SUPPORT }} --add-dynamic-module=../nginx-ubus-mod
           make modules
 
       - name: Run Static-Analyze
         env:
           NGINX_VERSION: ${{ steps.determine_nginx_version.outputs.nginx_version }}
+          THREAD_SUPPORT: ${{ matrix.thread && '--with-threads' || '' }}
         run: |
           cd nginx-${{ env.NGINX_VERSION }}
 
           make clean
-          ./configure --with-threads --add-dynamic-module=../nginx-ubus-mod
+          ./configure ${{ env.THREAD_SUPPORT }} --add-dynamic-module=../nginx-ubus-mod
           if [ "${{ matrix.compiler }}" == "clang" ]; then
             scan-build make modules
           else
