@@ -1,7 +1,7 @@
 ngx_addon_name=ngx_http_ubus_module
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_ubus_module
-ngx_module_libs="-lubus -lubox -lblobmsg_json -ljson-c -lpthread"
+ngx_module_libs="-lubus -lubox -lblobmsg_json -ljson-c"
 ngx_module_srcs="$ngx_addon_dir/src/ngx_http_ubus_module.c \
                  $ngx_addon_dir/src/ubus_utility.c"
 ngx_module_deps="$ngx_addon_dir/src/ubus_utility.h"
