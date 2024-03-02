@@ -867,6 +867,8 @@ static void ngx_http_ubus_req_handler(ngx_http_request_t *r) {
 
 	json_tokener_free(jstok);
 
+	r->main->blocked++;
+
 	return;
 
 free_obj:
