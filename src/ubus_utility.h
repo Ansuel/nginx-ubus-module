@@ -19,7 +19,6 @@
 #include <libubox/avl-cmp.h>
 
 #include <pthread.h>
-#include <semaphore.h>
 
 #include <libubus.h>
 #include <json-c/json.h>
